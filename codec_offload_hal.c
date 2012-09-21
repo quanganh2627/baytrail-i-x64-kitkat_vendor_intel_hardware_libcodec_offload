@@ -48,7 +48,7 @@
 #include <alsa/asoundlib.h>
 
 #define CODEC_OFFLOAD_BUFSIZE       (64*1024) /* Default buffer size in bytes */
-#define CODEC_OFFLOAD_LATENCY       4000      /* Default latency in mSec  */
+#define CODEC_OFFLOAD_LATENCY       10      /* Default latency in mSec  */
 #define CODEC_OFFLOAD_SAMPLINGRATE  48000     /* Default sampling rate in Hz */
 #define CODEC_OFFLOAD_BITRATE       128000    /* Default bitrate in bps  */
 #define CODEC_OFFLOAD_PCM_WORD_SIZE 16        /* Default PCM wordsize in bits */
@@ -64,6 +64,7 @@
 #define SST_VOLUME_TYPE 0x602
 #define SST_VOLUME_SIZE 1
 #define SST_PPP_VOL_STR_ID  0x03
+#define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
 
 static snd_pcm_t *pHandle;
 
@@ -192,7 +193,7 @@ static int out_resume( struct audio_stream *stream)
     ALOGV("out_resume: the state = %d", out->state);
     pthread_mutex_lock(&out->lock);
     if( compress_resume(out->compress) < 0) {
-        ALOGE("failed in the compress reume");
+        ALOGE("failed in the compress resume");
         pthread_mutex_unlock(&out->lock);
         return -ENOSYS;
     }
@@ -214,11 +215,6 @@ static int close_device(struct audio_stream_out *stream)
         close(out->fd);
         ALOGV("close_device: intel-sst- fd closed");
     }
-    if (pHandle){
-        //snd_pcm_close(pHandle);
-        //ALOGV("close_device: PCM output device closed");
-    }
-    //pHandle        = NULL;
     out->fd = 0;
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
@@ -298,11 +294,6 @@ static int open_device(struct offload_stream_out *out)
                                   compress_get_error(out->compress));
         ALOGE("open_device:Unable to open Compress device %d:%d\n",
                                   card, out->device_output);
-        if (pHandle){
-            //snd_pcm_close(pHandle);
-           //ALOGV("open_device: PCM output device closed");
-        }
-        //pHandle        = NULL;
         return -EINVAL;
     }
     ALOGV("open_device: Compress device opened sucessfully");
@@ -418,8 +409,8 @@ static char* out_get_parameters(const struct audio_stream *stream, const char *k
 {
     const char *temp;
     char * value;
-     struct str_parms *param;
-   struct offload_stream_out *out = (struct offload_stream_out *)stream;
+    struct str_parms *param;
+    struct offload_stream_out *out = (struct offload_stream_out *)stream;
     param = str_parms_create_str(keys);
     if (str_parms_get_str(param, AUDIO_PARAMETER_STREAM_ROUTING, value,
                                 strlen(AUDIO_PARAMETER_STREAM_ROUTING)) >= 0) {
@@ -433,7 +424,6 @@ static char* out_get_parameters(const struct audio_stream *stream, const char *k
 
 static uint32_t out_get_latency(const struct audio_stream_out *stream)
 {
-    // For video use case, we need to provide the right latency value here
     return CODEC_OFFLOAD_LATENCY;
 }
 
@@ -468,7 +458,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     } else {
         sst_vol.params =  (uint8_t)(20*log10(left));
     }
-    sst_vol.type = SST_VOLUME_TYPE; /* check with jeeja for #define val */
+    sst_vol.type = SST_VOLUME_TYPE;
     sst_vol.size = SST_VOLUME_SIZE;
 
 
@@ -478,7 +468,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 
    // Incase if device is already set with same volume, we can ignore this request
     struct offload_vol_algo_param  sst_get_vol;
-    sst_get_vol.type      = SST_VOLUME_TYPE; // 0x602;
+    sst_get_vol.type = SST_VOLUME_TYPE; // 0x602;
     sst_get_vol.size = SST_VOLUME_SIZE; // 1;
 
     struct snd_ppp_params  sst_ppp_get_vol;
@@ -493,12 +483,12 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
         ALOGV("setVolume:  The volume read by getvolume stream_id =%d, volume = %d dB",
                             sst_ppp_get_vol.str_id, sst_get_vol.params);
         if (sst_get_vol.params == sst_vol.params) {
-               pthread_mutex_unlock(&out->lock);
-               ALOGV("setVolume: No update since volume requested matches to one in the system.");
-           return 0;
-       }
-   }
-   ALOGV("setVolume:  The volume read by getvolume stream_id =%d, volume = %d dB",
+            pthread_mutex_unlock(&out->lock);
+            ALOGV("setVolume: No update since volume requested matches to one in the system.");
+            return 0;
+        }
+    }
+    ALOGV("setVolume:  The volume read by getvolume stream_id =%d, volume = %d dB",
                             sst_ppp_get_vol.str_id, sst_get_vol.params);
     struct snd_ppp_params  sst_ppp_vol;
     sst_ppp_vol.algo_id = SST_CODEC_VOLUME_CONTROL;
@@ -807,7 +797,7 @@ static size_t offload_dev_get_input_buffer_size(const struct audio_hw_device *de
                                          uint32_t sample_rate, audio_format_t format,
                                          int channel_count)
 {
-    return 320;
+    return CODEC_OFFLOAD_INPUT_BUFFERSIZE;
 }
 
 static size_t offload_dev_get_offload_buffer_size(const struct audio_hw_device *dev,
