@@ -215,6 +215,13 @@ static int close_device(struct audio_stream_out *stream)
         close(out->fd);
         ALOGV("close_device: intel-sst- fd closed");
     }
+
+    if (pHandle) {
+        snd_pcm_close(pHandle);
+        ALOGV("close: PCM output device closed");
+    }
+    pHandle        = NULL;
+
     out->fd = 0;
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
@@ -294,6 +301,13 @@ static int open_device(struct offload_stream_out *out)
                                   compress_get_error(out->compress));
         ALOGE("open_device:Unable to open Compress device %d:%d\n",
                                   card, out->device_output);
+
+        if (pHandle) {
+            snd_pcm_close(pHandle);
+            ALOGV("open_device: Closed PCM because of compress open error");
+        }
+        pHandle        = NULL;
+
         return -EINVAL;
     }
     ALOGV("open_device: Compress device opened sucessfully");
