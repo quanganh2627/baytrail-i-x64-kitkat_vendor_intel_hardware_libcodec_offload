@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "codec_offload_hw"
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 
 #include <pthread.h>
 #include <stdint.h>
@@ -561,7 +561,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                 ALOGE("write: Failed in the compress_start");
                 return retval;
             }
-            LOGI("out_write[%d]: writen  compress_start in state ", out->state);
+            ALOGV("out_write[%d]: writen  compress_start in state ", out->state);
             out->state = STREAM_RUNNING;
             break;
         case STREAM_RUNNING:
@@ -574,7 +574,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                 ALOGE("out_write:[%d] compress_write: Fatal error %s", out->state, strerror(errno));
                 sent = 0;
             }
-            LOGI("out_write:[%d] written %d bytes now", out->state, (int) sent);
+            ALOGV("out_write:[%d] written %d bytes now", out->state, (int) sent);
             break;
 
         default:
