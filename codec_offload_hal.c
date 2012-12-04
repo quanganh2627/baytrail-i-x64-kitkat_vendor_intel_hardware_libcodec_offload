@@ -902,7 +902,7 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
     }
 
     offload_dev->device.common.tag = HARDWARE_DEVICE_TAG;
-    offload_dev->device.common.version = AUDIO_DEVICE_API_VERSION_1_0;
+    offload_dev->device.common.version = AUDIO_DEVICE_API_VERSION_2_0;
     offload_dev->device.common.module = (struct hw_module_t *) module;
     offload_dev->device.common.close = offload_dev_close;
 
@@ -930,7 +930,7 @@ static struct hw_module_methods_t hal_module_methods = {
 struct audio_module HAL_MODULE_INFO_SYM = {
     common : {
         tag : HARDWARE_MODULE_TAG,
-        module_api_version: AUDIO_DEVICE_API_VERSION_1_0,
+        module_api_version: AUDIO_DEVICE_API_VERSION_2_0,
         hal_api_version: HARDWARE_HAL_API_VERSION,
         id : AUDIO_HARDWARE_MODULE_ID,
         name : "CODEC Offload HAL",
