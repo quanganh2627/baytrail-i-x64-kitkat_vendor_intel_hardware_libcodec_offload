@@ -74,7 +74,8 @@ typedef enum {
     STREAM_READY     = 1, /* Device opened, SET_STREAM_PARAMS done */
     STREAM_RUNNING   = 2, /* STREAM_START done and write calls going  */
     STREAM_PAUSING   = 3, /* STREAM_PAUSE to call and stream is pausing */
-    STREAM_RESUMING  = 4  /* STREAM_RESUME to call and is OK for writes */
+    STREAM_RESUMING  = 4,  /* STREAM_RESUME to call and is OK for writes */
+    STREAM_DRAINING  = 5  /* STREAM_DRAINING to call and is OK for writes */
 }sst_stream_states;
 
 /* The data structure used for passing the codec specific information to the
@@ -183,6 +184,7 @@ static int out_pause(struct audio_stream *stream)
      }
      out->state = STREAM_PAUSING;
      pthread_mutex_unlock(&out->lock);
+     ALOGV("out_pause: out = %d", out->state );
      return 0;
 }
 
@@ -199,14 +201,21 @@ static int out_resume( struct audio_stream *stream)
     }
     out->state = STREAM_RUNNING;
     pthread_mutex_unlock(&out->lock);
+    ALOGV("out_resume: out = %d", out->state);
     return 0;
 }
 
 static int close_device(struct audio_stream_out *stream)
 {
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
-    pthread_mutex_lock(&out->lock);
     ALOGV("close_device");
+    pthread_mutex_lock(&out->lock);
+    if( out->state == STREAM_DRAINING)
+    {
+        ALOGV("Close is called after partial drain, Call the darin");
+        compress_drain(out->compress);
+        ALOGV("Close: coming out of drain");
+    }
     if (out->compress) {
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
@@ -379,6 +388,8 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
     param = str_parms_create_str(kvpairs);
     int value=0;
+    int delay = -1;
+    int padding = -1;
 
     // Bits per sample - for WMA
     if (str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE, &value) >= 0) {
@@ -415,6 +426,27 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     if ( str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_ENCODE_OPTION, &value) >= 0) {
         str_parms_del(param, AUDIO_OFFLOAD_CODEC_ENCODE_OPTION);
         mCodec.encodeOption = value;
+    }
+    // Delay samples - for MP3
+    if ( str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_DELAY_SAMPLES, &value) >= 0) {
+        str_parms_del(param, AUDIO_OFFLOAD_CODEC_DELAY_SAMPLES);
+        delay = value;
+    }
+    // Padding samples - for MP3
+    if ( str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES, &value) >= 0) {
+        str_parms_del(param, AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES);
+        padding = value;
+    }
+    if (delay >= 0 && padding >= 0) {
+        ALOGV("set_param: setting delay %d, padding %d", delay, padding);
+        struct compr_mdata_config config;
+        config.encoder_delay = delay;
+        config.encoder_padding = padding;
+
+        int err = compress_set_metadata(out->compress, &config);
+        if (err < 0) {
+            ALOGE("set_param error in setting padding meta data %d", err);
+        }
     }
     return 0;
 }
@@ -531,6 +563,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
 
     if (!bytes) {
         if (out->compress && out->state==STREAM_RUNNING)
+            ALOGV("out_write: calling compress_drain");
             compress_drain(out->compress);
         return 0;
     }
@@ -548,6 +581,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                 return retval;
             }
         case STREAM_READY:
+        case STREAM_DRAINING:
             if (out->volume_change_requested) {
                 out->stream.set_volume(&out->stream,out->volume, out->volume);
             }
@@ -581,7 +615,6 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             ALOGW("out_write[%d]: Ignored", out->state);
             return retval;
     }
-
     return sent;
 }
 
@@ -627,10 +660,16 @@ static int out_drain(struct audio_stream_out *stream)
 {
     ALOGV("out_drain");
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
-    if (compress_drain(out->compress) < 0 ) {
+
+    ALOGV("out_drain: calling partail drain");
+    if (compress_partial_drain(out->compress) < 0 ) {
         ALOGE("out_drain: Failed in the compress_drain ");
+        compress_stop(out->compress);
+        out->state = STREAM_READY;
         return -ENOSYS;
     }
+    ALOGV("out_drain: drained");
+    out->state = STREAM_DRAINING;
     return 0;
 }
 
@@ -639,6 +678,8 @@ static int out_flush (struct audio_stream *stream)
    struct offload_stream_out *out = (struct offload_stream_out *)stream;
    switch (out->state) {
         case STREAM_RUNNING:
+        case STREAM_READY:
+        case STREAM_DRAINING:
             break;
         case STREAM_PAUSING:
             out->adjusted_render_offset = 0;
@@ -656,6 +697,7 @@ static int out_flush (struct audio_stream *stream)
     }
 
     out->state = STREAM_READY;
+    ALOGV("out_flush:[%d] out Compress Stop", out->state);
     return 0;
 }
 
