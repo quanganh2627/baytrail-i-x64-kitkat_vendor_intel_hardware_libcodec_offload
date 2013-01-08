@@ -174,7 +174,7 @@ static int out_pause(struct audio_stream *stream)
         return 0;
      }
      ALOGV("out_pause: out->state = %d", out->state );
-     int ret = out->stream.get_render_position(aout, &out->paused_duration);
+     out->stream.get_render_position(aout, &out->paused_duration);
 
      pthread_mutex_lock(&out->lock);
      if(compress_pause(out->compress) < 0 ) {
@@ -240,9 +240,8 @@ static int close_device(struct audio_stream_out *stream)
 static int open_device(struct offload_stream_out *out)
 {
     int card  = snd_card_get_index(AUDIO_DEVICE_NAME);
-    int err;
+    int err = 0;
     struct compr_config config;
-    struct compress *compress;
     struct snd_codec codec;
 
     if (out->state != STREAM_CLOSED) {
@@ -253,7 +252,8 @@ static int open_device(struct offload_stream_out *out)
     sprintf(device_v, "hw:%d,%d", card, 2);
     ALOGV("device_v = %s", device_v);
     if ((err = snd_pcm_open(&pHandle, device_v, SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
-       ALOGV("snd_pcm_open err(&pHandle, device_v, SND_PCM_STREAM_PLAYBACK, 0) %d", err);
+        ALOGE("open_device: Failed to open PCM device: %s", (char*)strerror(err));
+        return -EINVAL;
     }
     if ((err = snd_pcm_set_params(pHandle,
                     SND_PCM_FORMAT_S16_LE,
@@ -380,16 +380,16 @@ static int out_dump(const struct audio_stream *stream, int fd)
 
 static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 {
-    struct str_parms *param;
-
     ALOGV("out_set_parameters kvpairs = %s", kvpairs);
+
+    struct str_parms *param;
+    int value = 0;
+    int delay = -1;
+    int padding = -1;
 
     struct offload_stream_out *out = (struct offload_stream_out*)stream;
 
     param = str_parms_create_str(kvpairs);
-    int value=0;
-    int delay = -1;
-    int padding = -1;
 
     // Bits per sample - for WMA
     if (str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE, &value) >= 0) {
@@ -448,13 +448,14 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
             ALOGE("set_param error in setting padding meta data %d", err);
         }
     }
+    str_parms_destroy(param);
     return 0;
 }
 
 static char* out_get_parameters(const struct audio_stream *stream, const char *keys)
 {
-    const char *temp;
-    char * value;
+    const char *temp = NULL;
+    char * value = NULL;
     struct str_parms *param;
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
     param = str_parms_create_str(keys);
@@ -465,6 +466,7 @@ static char* out_get_parameters(const struct audio_stream *stream, const char *k
     }
     ALOGV("getParameters: %s", str_parms_to_str(param));
     temp = str_parms_to_str(param);
+    str_parms_destroy(param);
     return (char*)temp;
 }
 
@@ -790,12 +792,12 @@ static void offload_dev_close_output_stream(struct audio_hw_device *dev,
 
 static int offload_dev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
 {
-    struct str_parms *param;
-
     ALOGV("offload_dev_set_parameters kvpairs = %s", kvpairs);
 
-    param = str_parms_create_str(kvpairs);
+    struct str_parms *param;
     int value=0;
+
+    param = str_parms_create_str(kvpairs);
 
     // Avg bitrate in bps - for WMA/AAC/MP3
     if ( str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_AVG_BIT_RATE, &value) >= 0) {
@@ -815,6 +817,7 @@ static int offload_dev_set_parameters(struct audio_hw_device *dev, const char *k
         mCodec.numChannels = value;
         ALOGV("offload_dev_set_parameters: num of channels %d", mCodec.numChannels);
     }
+    str_parms_destroy(param);
     return 0;
 }
 
@@ -930,7 +933,6 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
 {
     ALOGV("offload_dev_open");
     struct offload_audio_device *offload_dev;
-    int ret;
 
     if (strcmp(name, AUDIO_HARDWARE_INTERFACE) != 0) {
         ALOGV("offload_dev_open: name != AUDIO_HARDWARE_INTERFACE");
