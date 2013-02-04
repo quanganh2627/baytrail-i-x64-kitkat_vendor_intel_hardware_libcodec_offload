@@ -46,6 +46,7 @@
 
 #define _POSIX_SOURCE
 #include <alsa/asoundlib.h>
+#include <cutils/properties.h>
 
 #define CODEC_OFFLOAD_BUFSIZE       (64*1024) /* Default buffer size in bytes */
 #define CODEC_OFFLOAD_LATENCY       10      /* Default latency in mSec  */
@@ -65,8 +66,6 @@
 #define SST_VOLUME_SIZE 1
 #define SST_PPP_VOL_STR_ID  0x03
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
-
-static snd_pcm_t *pHandle;
 
 /* stream states */
 typedef enum {
@@ -225,12 +224,6 @@ static int close_device(struct audio_stream_out *stream)
         ALOGV("close_device: intel-sst- fd closed");
     }
 
-    if (pHandle) {
-        snd_pcm_close(pHandle);
-        ALOGV("close: PCM output device closed");
-    }
-    pHandle        = NULL;
-
     out->fd = 0;
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
@@ -244,26 +237,17 @@ static int open_device(struct offload_stream_out *out)
     struct compr_config config;
     struct snd_codec codec;
 
+    char value[PROPERTY_VALUE_MAX];
+    property_get("offload.compress.device", value, "0");
+    int device = atoi(value);
+
+    ALOGV("open_device: device %d", device);
+
     if (out->state != STREAM_CLOSED) {
         ALOGE("open[%d] Error with stream state", out->state);
         return -EINVAL;
     }
-    char device_v[128];
-    sprintf(device_v, "hw:%d,%d", card, 2);
-    ALOGV("device_v = %s", device_v);
-    if ((err = snd_pcm_open(&pHandle, device_v, SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
-        ALOGE("open_device: Failed to open PCM device: %s", (char*)strerror(err));
-        return -EINVAL;
-    }
-    if ((err = snd_pcm_set_params(pHandle,
-                    SND_PCM_FORMAT_S16_LE,
-                    SND_PCM_ACCESS_RW_INTERLEAVED,
-                    CODEC_OFFLOAD_CHANNEL_COUNT,
-                    CODEC_OFFLOAD_SAMPLINGRATE, 1, 500000)) < 0) {
-        ALOGE("open_device: SND_PCM set_params failure setting %s\n", snd_strerror(err));
-        close_device(&out->stream);
-        return -EINVAL;
-    }
+
     // update the configuration structure for given type of stream
     if (out->format == AUDIO_FORMAT_MP3) {
         codec.id = SND_AUDIOCODEC_MP3;
@@ -303,20 +287,13 @@ static int open_device(struct offload_stream_out *out)
     config.fragments = 2;
     config.codec = &codec;
 
-    out->compress = compress_open(3, 0, COMPRESS_IN, &config);
+    out->compress = compress_open(card, device, COMPRESS_IN, &config);
 
     if (!out->compress || !is_compress_ready(out->compress)) {
         ALOGE("open_device: compress_open Error  %s\n",
                                   compress_get_error(out->compress));
         ALOGE("open_device:Unable to open Compress device %d:%d\n",
                                   card, out->device_output);
-
-        if (pHandle) {
-            snd_pcm_close(pHandle);
-            ALOGV("open_device: Closed PCM because of compress open error");
-        }
-        pHandle        = NULL;
-
         return -EINVAL;
     }
     ALOGV("open_device: Compress device opened sucessfully");
