@@ -367,6 +367,10 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     struct offload_stream_out *out = (struct offload_stream_out*)stream;
 
     param = str_parms_create_str(kvpairs);
+    if (param == NULL) {
+        ALOGE("out_set_parameters: Error creating str from kvpairs");
+        return NULL;
+    }
 
     // Bits per sample - for WMA
     if (str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE, &value) >= 0) {
@@ -435,7 +439,13 @@ static char* out_get_parameters(const struct audio_stream *stream, const char *k
     char * value = NULL;
     struct str_parms *param;
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
+
     param = str_parms_create_str(keys);
+    if (param == NULL) {
+        ALOGE("out_get_parameters: Error creating str from keys");
+        return NULL;
+    }
+
     if (str_parms_get_str(param, AUDIO_PARAMETER_STREAM_ROUTING, value,
                                 strlen(AUDIO_PARAMETER_STREAM_ROUTING)) >= 0) {
         str_parms_add_int(param, AUDIO_PARAMETER_STREAM_ROUTING,
@@ -541,9 +551,10 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
 
     if (!bytes) {
-        if (out->compress && out->state==STREAM_RUNNING)
+        if (out->compress && out->state==STREAM_RUNNING) {
             ALOGV("out_write: calling compress_drain");
             compress_drain(out->compress);
+        }
         return 0;
     }
 
@@ -775,6 +786,10 @@ static int offload_dev_set_parameters(struct audio_hw_device *dev, const char *k
     int value=0;
 
     param = str_parms_create_str(kvpairs);
+    if (param == NULL) {
+        ALOGE("offload_dev_set_parameters: Error creating str from kvpairs");
+        return NULL;
+    }
 
     // Avg bitrate in bps - for WMA/AAC/MP3
     if ( str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_AVG_BIT_RATE, &value) >= 0) {
