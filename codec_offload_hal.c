@@ -435,10 +435,11 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
 static char* out_get_parameters(const struct audio_stream *stream, const char *keys)
 {
-    const char *temp = NULL;
-    char * value = NULL;
+    char *temp = NULL;
     struct str_parms *param;
+    char value[256];
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
+    int ret = 0;
 
     param = str_parms_create_str(keys);
     if (param == NULL) {
@@ -448,13 +449,17 @@ static char* out_get_parameters(const struct audio_stream *stream, const char *k
 
     if (str_parms_get_str(param, AUDIO_PARAMETER_STREAM_ROUTING, value,
                                 strlen(AUDIO_PARAMETER_STREAM_ROUTING)) >= 0) {
-        str_parms_add_int(param, AUDIO_PARAMETER_STREAM_ROUTING,
+        ret = str_parms_add_int(param, AUDIO_PARAMETER_STREAM_ROUTING,
                                             out->device_output);
+        if (ret >= 0) {
+            temp = str_parms_to_str(param);
+        } else {
+            temp = strdup(keys);
+        }
     }
-    ALOGV("getParameters: %s", str_parms_to_str(param));
-    temp = str_parms_to_str(param);
     str_parms_destroy(param);
-    return (char*)temp;
+    ALOGV("out_get_parameters: %s", temp);
+    return temp;
 }
 
 static uint32_t out_get_latency(const struct audio_stream_out *stream)
@@ -627,6 +632,7 @@ static int out_get_render_position(const struct audio_stream_out *stream,
         case STREAM_RUNNING:
         case STREAM_READY:
         case STREAM_PAUSING:
+        case STREAM_DRAINING:
             if (compress_get_hpointer(out->compress, &avail,&tstamp) < 0) {
                 ALOGW("out_get_render_position: compress_get_hposition Failed");
                 pthread_mutex_unlock(&out->lock);
