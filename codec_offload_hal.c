@@ -43,6 +43,7 @@
 #include <intel_sst_ioctl.h>
 #include <compress_params.h>
 #include <tinycompress.h>
+#include "hardware_legacy/power.h"
 
 #define _POSIX_SOURCE
 #include <alsa/asoundlib.h>
@@ -66,6 +67,7 @@
 #define SST_VOLUME_SIZE 1
 #define SST_PPP_VOL_STR_ID  0x03
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
+static char lockid_offload[32] = "codec_offload_hal";
 
 /* stream states */
 typedef enum {
@@ -287,6 +289,7 @@ static int open_device(struct offload_stream_out *out)
     config.fragments = 2;
     config.codec = &codec;
 
+    acquire_wake_lock(PARTIAL_WAKE_LOCK, lockid_offload);
     out->compress = compress_open(card, device, COMPRESS_IN, &config);
 
     if (!out->compress || !is_compress_ready(out->compress)) {
@@ -294,6 +297,7 @@ static int open_device(struct offload_stream_out *out)
                                   compress_get_error(out->compress));
         ALOGE("open_device:Unable to open Compress device %d:%d\n",
                                   card, out->device_output);
+        release_wake_lock(lockid_offload);
         return -EINVAL;
     }
     ALOGV("open_device: Compress device opened sucessfully");
@@ -301,9 +305,11 @@ static int open_device(struct offload_stream_out *out)
     if (out->fd < 0) {
         ALOGE("error opening LPE device, error = %d",out->fd);
         close_device(&out->stream);
+        release_wake_lock(lockid_offload);
         //pthread_mutex_unlock(&out->lock);
         return -EIO;
     }
+
     ALOGV("open_device: intel_sst_ctrl opened sucessuflly with fd=%d", out->fd);
     return 0;
 }
@@ -782,6 +788,7 @@ static void offload_dev_close_output_stream(struct audio_hw_device *dev,
     close_device(stream);
     loffload_dev->offload_out_ref_count = 0;
     free(stream);
+    release_wake_lock(lockid_offload);
 }
 
 static int offload_dev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
