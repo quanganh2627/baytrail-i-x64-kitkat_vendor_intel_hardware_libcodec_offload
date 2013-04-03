@@ -29,7 +29,8 @@ LOCAL_SRC_FILES := codec_offload_hal.c
 LOCAL_SHARED_LIBRARIES := liblog libcutils \
                           libutils \
                           libasound \
-                          libtinycompress
+                          libtinycompress \
+                          libhardware_legacy
 
 LOCAL_STATIC_LIBRARIES := libmedia_helper
 LOCAL_MODULE_TAGS := optional
