@@ -40,6 +40,10 @@ LOCAL_C_INCLUDES := external/alsa-lib/include $(KERNEL_SRC_DIR)/include/sound \
                     external/tinycompress/include/tinycompress \
                     external/tinycompress/include/sound
 
+ifeq ($(strip $(MRFLD_AUDIO)),true)
+  LOCAL_CFLAGS += -DMRFLD_AUDIO
+endif
+
 
 include $(BUILD_SHARED_LIBRARY)
 

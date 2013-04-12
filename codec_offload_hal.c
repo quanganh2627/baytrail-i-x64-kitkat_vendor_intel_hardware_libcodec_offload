@@ -61,7 +61,11 @@
 
 #define OFFLOAD_STREAM_DEFAULT_OUTPUT   2      /* Speaker */
 
+#ifdef MRFLD_AUDIO
+#define AUDIO_DEVICE_NAME  "lm49453audio" /* MRFLD device */
+#else
 #define AUDIO_DEVICE_NAME  "cloverviewaudio"  /* change this according to HW */
+#endif
 #define SST_VOLUME_MUTE 0xA0
 #define SST_VOLUME_TYPE 0x602
 #define SST_VOLUME_SIZE 1
@@ -307,6 +311,7 @@ static int open_device(struct offload_stream_out *out)
         return -EINVAL;
     }
     ALOGV("open_device: Compress device opened sucessfully");
+#ifndef MRFLD_AUDIO
     out->fd = open("/dev/intel_sst_ctrl", O_RDWR);
     if (out->fd < 0) {
         ALOGE("error opening LPE device, error = %d",out->fd);
@@ -317,6 +322,7 @@ static int open_device(struct offload_stream_out *out)
     }
 
     ALOGV("open_device: intel_sst_ctrl opened sucessuflly with fd=%d", out->fd);
+#endif
     return 0;
 }
 
@@ -482,6 +488,7 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
 static int out_set_volume(struct audio_stream_out *stream, float left,
                           float right)
 {
+#ifndef MRFLD_AUDIO
     ALOGV("out_set_volume right vol= %f, left vol = %f", right, left);
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
 
@@ -559,6 +566,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     }
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, sst_vol.params);
     pthread_mutex_unlock(&out->lock);
+#endif
     return 0;
 }
 
