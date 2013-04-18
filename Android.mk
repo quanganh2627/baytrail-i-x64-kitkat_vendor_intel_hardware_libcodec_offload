@@ -32,6 +32,10 @@ LOCAL_SHARED_LIBRARIES := liblog libcutils \
                           libtinycompress \
                           libhardware_legacy
 
+ifeq ($(strip $(MRFLD_AUDIO)),true)
+LOCAL_SHARED_LIBRARIES += libtinyalsa
+endif
+
 LOCAL_STATIC_LIBRARIES := libmedia_helper
 LOCAL_MODULE_TAGS := optional
 
@@ -41,9 +45,12 @@ LOCAL_C_INCLUDES := $(call include-path-for, alsa-lib) \
                     $(call include-path-for, tinycompress)/sound
 
 ifeq ($(strip $(MRFLD_AUDIO)),true)
-  LOCAL_CFLAGS += -DMRFLD_AUDIO
+LOCAL_C_INCLUDES += external/tinyalsa/include
 endif
 
+ifeq ($(strip $(MRFLD_AUDIO)),true)
+LOCAL_CFLAGS += -DMRFLD_AUDIO
+endif
 
 include $(BUILD_SHARED_LIBRARY)
 

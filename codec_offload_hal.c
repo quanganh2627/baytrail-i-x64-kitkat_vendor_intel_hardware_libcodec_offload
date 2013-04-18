@@ -44,6 +44,9 @@
 #include <compress_params.h>
 #include <tinycompress.h>
 #include "hardware_legacy/power.h"
+#ifdef MRFLD_AUDIO
+#include <tinyalsa/asoundlib.h>
+#endif
 
 #define _POSIX_SOURCE
 #include <alsa/asoundlib.h>
@@ -60,16 +63,19 @@
 #define OFFLOAD_MAX_ALLOWED_BUFSIZE (128*1024) /*  bytes */
 
 #define OFFLOAD_STREAM_DEFAULT_OUTPUT   2      /* Speaker */
+#define MIXER_VOL_CTL_NAME "Compress Volume"
 
 #ifdef MRFLD_AUDIO
 #define AUDIO_DEVICE_NAME  "lm49453audio" /* MRFLD device */
+/* -1440 is the value expected by vol lib for a gain of -144dB */
+#define SST_VOLUME_MUTE 0xFA60 /* 2s complement of 1440 */
 #else
 #define AUDIO_DEVICE_NAME  "cloverviewaudio"  /* change this according to HW */
-#endif
 #define SST_VOLUME_MUTE 0xA0
 #define SST_VOLUME_TYPE 0x602
 #define SST_VOLUME_SIZE 1
 #define SST_PPP_VOL_STR_ID  0x03
+#endif
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
 static char lockid_offload[32] = "codec_offload_hal";
 
@@ -231,12 +237,13 @@ static int close_device(struct audio_stream_out *stream)
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
     }
+#ifndef MRFLD_AUDIO
     if (out->fd) {
         close(out->fd);
         ALOGV("close_device: intel-sst- fd closed");
     }
-
     out->fd = 0;
+#endif
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
     return 0;
@@ -320,7 +327,6 @@ static int open_device(struct offload_stream_out *out)
         //pthread_mutex_unlock(&out->lock);
         return -EIO;
     }
-
     ALOGV("open_device: intel_sst_ctrl opened sucessuflly with fd=%d", out->fd);
 #endif
     return 0;
@@ -488,16 +494,14 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
 static int out_set_volume(struct audio_stream_out *stream, float left,
                           float right)
 {
-#ifndef MRFLD_AUDIO
     ALOGV("out_set_volume right vol= %f, left vol = %f", right, left);
-    struct offload_stream_out *out = (struct offload_stream_out *)stream ;
-
     // Check the boundary conditions and apply volume to LPE
     if (left < 0.0f || left > 1.0f) {
-        ALOGE("setVolume: Invalid data as vol=%f mOffloadDevice=%d", left, out->fd);
+        ALOGE("setVolume: Invalid data as vol=%f ", left);
         return -EINVAL;
     }
-
+#ifndef MRFLD_AUDIO
+    struct offload_stream_out *out = (struct offload_stream_out *)stream ;
     // Device could be in standby state. Once active, set new volume
     if (!out->fd){
         out->volume = left;
@@ -566,6 +570,41 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     }
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, sst_vol.params);
     pthread_mutex_unlock(&out->lock);
+#else
+    unsigned int card = snd_card_get_index(AUDIO_DEVICE_NAME);
+    struct mixer *mixer;
+    struct mixer_ctl* vol_ctl;
+    uint16_t volume;
+    mixer = mixer_open(card);
+    if (!mixer) {
+        fprintf(stderr, "Failed to open mixer for card %d\n", card);
+        return -ENOSYS;
+    }
+    vol_ctl = mixer_get_ctl_by_name(mixer, MIXER_VOL_CTL_NAME);
+    if (!vol_ctl) {
+        ALOGE("setVolume: Error opening the mixer control %s", MIXER_VOL_CTL_NAME);
+        mixer_close(mixer);
+        return -EINVAL;
+    }
+    if (left == 0) {
+        // Set the mute value for the FW i.e -144dB
+       volume = SST_VOLUME_MUTE; //2s compliment of -144 dB
+    } else {
+       // gain library expects user input of integer gain in 0.1dB
+       // Eg., 60 in decimal represents 6dB
+       volume = (uint16_t)((20 * log10(left)) * 10);
+    }
+    ALOGV("setVolume: volume computed: %d", volume);
+    if ((mixer_ctl_get_value(vol_ctl, 0)) == volume) {
+        ALOGV("setVolume: No update since volume requested matches to one in the system");
+        return 0;
+    }
+    int retval = mixer_ctl_set_value(vol_ctl, 0, volume);
+    if (retval < 0) {
+        ALOGE("setVolume: Error setting volume with dB value %x", volume);
+        return retval;
+    }
+    ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, volume);
 #endif
     return 0;
 }
@@ -620,7 +659,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             ALOGV("out_write:[%d] Writing to compress write with %d bytes..", out->state, bytes);
             sent = compress_write(out->compress, buffer, bytes);
             if (sent < 0) {
-                ALOGE("out_write:[%d] compress_write: Fatal error %s", out->state, strerror(errno));
+                ALOGE("out_write:[%d] compress_write: interrupted : %s", out->state, compress_get_error(out->compress));
                 sent = 0;
             }
             ALOGV("out_write:[%d] written %d bytes now", out->state, (int) sent);
