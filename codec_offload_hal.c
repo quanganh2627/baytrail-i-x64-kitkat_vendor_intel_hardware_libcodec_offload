@@ -193,6 +193,12 @@ static int out_resume( struct audio_stream *stream)
 {
     ALOGV("out_resume");
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
+
+     if( out->state == STREAM_READY ) {
+        ALOGV("out_resume ignored: the state = %d", out->state);
+        return 0;
+     }
+
     ALOGV("out_resume: the state = %d", out->state);
     pthread_mutex_lock(&out->lock);
     if( compress_resume(out->compress) < 0) {
