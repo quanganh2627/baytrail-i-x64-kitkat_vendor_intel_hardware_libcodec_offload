@@ -40,7 +40,7 @@
 #include <time.h>
 #include <string.h>
 #include <utils/threads.h>
-#include <intel_sst_ioctl.h>
+#include <linux/sound/intel_sst_ioctl.h>
 #include <compress_params.h>
 #include <tinycompress.h>
 #include "hardware_legacy/power.h"

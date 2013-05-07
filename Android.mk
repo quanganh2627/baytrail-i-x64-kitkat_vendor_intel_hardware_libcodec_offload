@@ -35,7 +35,7 @@ LOCAL_SHARED_LIBRARIES := liblog libcutils \
 LOCAL_STATIC_LIBRARIES := libmedia_helper
 LOCAL_MODULE_TAGS := optional
 
-LOCAL_C_INCLUDES := external/alsa-lib/include $(KERNEL_SRC_DIR)/include/sound \
+LOCAL_C_INCLUDES := external/alsa-lib/include \
                     frameworks/base/include/ \
                     external/tinycompress/include/tinycompress \
                     external/tinycompress/include/sound
