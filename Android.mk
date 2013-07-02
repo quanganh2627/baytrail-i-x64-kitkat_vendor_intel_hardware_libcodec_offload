@@ -35,10 +35,10 @@ LOCAL_SHARED_LIBRARIES := liblog libcutils \
 LOCAL_STATIC_LIBRARIES := libmedia_helper
 LOCAL_MODULE_TAGS := optional
 
-LOCAL_C_INCLUDES := external/alsa-lib/include \
-                    frameworks/base/include/ \
-                    external/tinycompress/include/tinycompress \
-                    external/tinycompress/include/sound
+LOCAL_C_INCLUDES := $(call include-path-for, alsa-lib) \
+                    $(call include-path-for, frameworks-base) \
+                    $(call include-path-for, tinycompress)/tinycompress \
+                    $(call include-path-for, tinycompress)/sound
 
 ifeq ($(strip $(MRFLD_AUDIO)),true)
   LOCAL_CFLAGS += -DMRFLD_AUDIO
