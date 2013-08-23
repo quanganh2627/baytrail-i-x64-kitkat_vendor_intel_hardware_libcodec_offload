@@ -271,8 +271,14 @@ static int open_device(struct offload_stream_out *out)
     if (out->format == AUDIO_FORMAT_MP3) {
         codec.id = SND_AUDIOCODEC_MP3;
         /* the channel maks is the one that come to hal. Converting the mask to channel number */
-        codec.ch_in = (out->channels == 3) ? 2: 1;
-        codec.ch_out = (out->channels == 3) ? 2:1;
+        int channel_count = popcount(out->channels);
+#ifndef MRFLD_AUDIO
+        if (channel_count > 2) {
+            channel_count = 1;
+        }
+#endif
+        codec.ch_out = channel_count;
+        codec.ch_in = channel_count;
         codec.sample_rate =  out->sample_rate;
         codec.bit_rate = mCodec.avgBitRate ? mCodec.avgBitRate : CODEC_OFFLOAD_BITRATE;
         codec.rate_control = 0;
@@ -292,8 +298,14 @@ static int open_device(struct offload_stream_out *out)
         /* AAC codec parameters  */
         codec.id = SND_AUDIOCODEC_AAC;
         /* Converting the mask to channel number */
-        codec.ch_in = (out->channels == 3) ? 2: 1;
-        codec.ch_out = (out->channels == 3) ? 2:1;
+        int channel_count = popcount(out->channels);
+#ifndef MRFLD_AUDIO
+        if (channel_count > 2) {
+            channel_count = 1;
+        }
+#endif
+        codec.ch_out = channel_count;
+        codec.ch_in = channel_count;
         codec.sample_rate =  out->sample_rate;
         codec.bit_rate = mCodec.avgBitRate ? mCodec.avgBitRate : CODEC_OFFLOAD_BITRATE;
         codec.rate_control = 0;
