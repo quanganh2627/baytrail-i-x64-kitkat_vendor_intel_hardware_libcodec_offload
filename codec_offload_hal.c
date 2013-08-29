@@ -66,11 +66,9 @@
 #define MIXER_VOL_CTL_NAME "Compress Volume"
 
 #ifdef MRFLD_AUDIO
-#define AUDIO_DEVICE_NAME  "lm49453audio" /* MRFLD device */
 /* -1440 is the value expected by vol lib for a gain of -144dB */
 #define SST_VOLUME_MUTE 0xFA60 /* 2s complement of 1440 */
 #else
-#define AUDIO_DEVICE_NAME  "cloverviewaudio"  /* change this according to HW */
 #define SST_VOLUME_MUTE 0xA0
 #define SST_VOLUME_TYPE 0x602
 #define SST_VOLUME_SIZE 1
@@ -251,12 +249,20 @@ static int close_device(struct audio_stream_out *stream)
 
 static int open_device(struct offload_stream_out *out)
 {
-    int card  = snd_card_get_index(AUDIO_DEVICE_NAME);
+    int card  = -1;
     int err = 0;
     struct compr_config config;
     struct snd_codec codec;
-
     char value[PROPERTY_VALUE_MAX];
+    // set the audio.device.name property in the init.<boardname>.rc file
+    // or set the property at runtime in adb shell using setprop
+    property_get("audio.device.name", value, "0");
+    card = snd_card_get_index(value);
+    if (card < 0) {
+        ALOGE("open_device: Invalid card name %s. Set the card name against"
+              "audio.device.name property in init.<boardname>.rc file", value);
+        return -EINVAL;
+    }
     property_get("offload.compress.device", value, "0");
     int device = atoi(value);
 
@@ -583,7 +589,17 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, sst_vol.params);
     pthread_mutex_unlock(&out->lock);
 #else
-    unsigned int card = snd_card_get_index(AUDIO_DEVICE_NAME);
+    int card = -1;
+    char value[PROPERTY_VALUE_MAX];
+    // set the audio.device.name property in the init.<boardname>.rc file
+    // or set the property at runtime in adb shell using setprop
+    property_get("audio.device.name", value, "0");
+    card = snd_card_get_index(value);
+    if (card < 0) {
+        ALOGE("open_device: Invalid card name %s. Set the card name against"
+              "audio.device.name property in init.<boardname>.rc file", value);
+        return -EINVAL;
+    }
     struct mixer *mixer;
     struct mixer_ctl* vol_ctl;
     uint16_t volume;
