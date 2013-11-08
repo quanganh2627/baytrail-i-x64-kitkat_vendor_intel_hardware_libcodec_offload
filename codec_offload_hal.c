@@ -462,13 +462,13 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     }
     if (delay >= 0 && padding >= 0) {
         ALOGV("set_param: setting delay %d, padding %d", delay, padding);
-        struct compr_gapless_mdata config;
+        struct compr_mdata_config config;
         config.encoder_delay = delay;
         config.encoder_padding = padding;
 
-        if ((compress_set_gapless_metadata(out->compress, &config)) < 0 ) {
-            ALOGE("set_param error in setting meta data %s",
-                                 compress_get_error(out->compress));
+        int err = compress_set_metadata(out->compress, &config);
+        if (err < 0) {
+            ALOGE("set_param error in setting padding meta data %d", err);
         }
     }
     str_parms_destroy(param);
@@ -744,11 +744,6 @@ static int out_drain(struct audio_stream_out *stream)
     ALOGV("out_drain");
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
 
-    ALOGV("out_drain: Signalling next track, if we use gapless");
-    if ((compress_next_track(out->compress)) < 0) {
-          ALOGE("set_param error in compress_next_track %s",
-                           compress_get_error(out->compress));
-    }
     ALOGV("out_drain: calling partail drain");
     if (compress_partial_drain(out->compress) < 0 ) {
         ALOGE("out_drain: Failed in the compress_drain ");
