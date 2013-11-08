@@ -1048,8 +1048,8 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
     offload_dev->device.set_mode = offload_dev_set_mode;
     offload_dev->device.set_parameters = offload_dev_set_parameters;
     offload_dev->device.get_parameters = offload_dev_get_parameters;
-    offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
-    offload_dev->device.get_offload_buffer_size = offload_dev_get_offload_buffer_size;
+    //offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
+    //offload_dev->device.get_offload_buffer_size = offload_dev_get_offload_buffer_size;
     offload_dev->device.open_output_stream = offload_dev_open_output_stream;
     offload_dev->device.close_output_stream = offload_dev_close_output_stream;
     offload_dev->device.dump = offload_dev_dump;
