@@ -522,6 +522,10 @@ int32_t DSP_setParam(struct effect* DSPhandle, dsp_param param, int16_t size,
             uint32_t enable = *(uint8_t*)value;
             pParam = (unsigned char*)malloc(sizeof(dsp_param) +
                                             sizeof(size) + size);
+            if (pParam == NULL) {
+                ALOGE("Error in memory allocation DSP-SetParam:EQ_ENABLE");
+                return -ENOMEM;
+            }
             index+= int16ToBytes(param, pParam); // type
             ALOGV("DSP_setParam type %d %d index %d",
                    *pParam, *(pParam + 1),index);
@@ -540,6 +544,10 @@ int32_t DSP_setParam(struct effect* DSPhandle, dsp_param param, int16_t size,
             }
             pParam = (unsigned char*)malloc(sizeof(dsp_param) +
                       sizeof(size) + size);
+            if (pParam == NULL) {
+                ALOGE("Error in memory allocation DSP-SetParam:EQ_BANDGAINS");
+                return -ENOMEM;
+            }
             index+= int16ToBytes(param, pParam); // type
             ALOGV("DSP_setParam type %d %d index %d",
                    *pParam, *(pParam + 1),index);
