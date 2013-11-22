@@ -43,6 +43,10 @@
 #include <linux/sound/intel_sst_ioctl.h>
 #include <compress_params.h>
 #include <tinycompress.h>
+#include <cutils/list.h>
+#include <sys/resource.h>
+#include <sys/prctl.h>
+#include <cutils/sched_policy.h>
 #include "hardware_legacy/power.h"
 #ifdef MRFLD_AUDIO
 #include <tinyalsa/asoundlib.h>
@@ -76,7 +80,12 @@
 #endif
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
 static char lockid_offload[32] = "codec_offload_hal";
-
+enum {
+    OFFLOAD_CMD_EXIT,               /* exit compress offload thread loop*/
+    OFFLOAD_CMD_DRAIN,              /* send a full drain request to DSP */
+    OFFLOAD_CMD_PARTIAL_DRAIN,      /* send a partial drain request to DSP */
+    OFFLOAD_CMD_WAIT_FOR_BUFFER,    /* wait for buffer released by DSP */
+};
 /* stream states */
 typedef enum {
     STREAM_CLOSED    = 0, /* Device not opened yet  */
@@ -86,7 +95,11 @@ typedef enum {
     STREAM_RESUMING  = 4,  /* STREAM_RESUME to call and is OK for writes */
     STREAM_DRAINING  = 5  /* STREAM_DRAINING to call and is OK for writes */
 }sst_stream_states;
-
+struct offload_cmd {
+    struct listnode node;
+    int cmd;
+    int data[];
+};
 /* The data structure used for passing the codec specific information to the
 * HAL offload hal for configuring the playback
 */
@@ -120,7 +133,9 @@ struct offload_audio_device {
 
 struct offload_stream_out {
     audio_stream_out_t stream;
+    pthread_cond_t  cond;
     sst_stream_states   state;
+    int                 standby;
     struct compress     *compress;
     int                 fd;
     float               volume;
@@ -137,6 +152,17 @@ struct offload_stream_out {
     int                 device_output;
     timer_t             paused_timer_id;
     pthread_mutex_t               lock;
+    int non_blocking;
+    int playback_started;
+    pthread_cond_t offload_cond;
+    pthread_t offload_thread;
+    struct listnode offload_cmd_list;
+    bool offload_thread_blocked;
+
+    stream_callback_t offload_callback;
+    void *offload_cookie;
+    struct compr_gapless_mdata gapless_mdata;
+    int send_new_metadata;
 };
 
 /* The parameter structure used for getting and setting the volume
@@ -242,6 +268,7 @@ static int close_device(struct audio_stream_out *stream)
     }
     out->fd = 0;
 #endif
+
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
     return 0;
@@ -332,6 +359,7 @@ static int open_device(struct offload_stream_out *out)
                                   compress_get_error(out->compress));
         ALOGE("open_device:Unable to open Compress device %d:%d\n",
                                   card, out->device_output);
+        compress_close(out->compress);
         release_wake_lock(lockid_offload);
         return -EINVAL;
     }
@@ -387,8 +415,35 @@ static int out_set_format(struct audio_stream *stream, audio_format_t format)
     return -1;
 }
 
+static void stop_compressed_output_l(struct offload_stream_out *out)
+{
+    //out->offload_state = OFFLOAD_STATE_IDLE;
+    out->playback_started = 0;
+    out->send_new_metadata = 1;
+    if (out->compress != NULL) {
+        compress_stop(out->compress);
+        while (out->offload_thread_blocked) {
+            pthread_cond_wait(&out->cond, &out->lock);
+        }
+    }
+}
 static int out_standby(struct audio_stream *stream)
 {
+   struct offload_stream_out *out = (struct offload_stream_out *)stream;
+
+    pthread_mutex_lock(&out->lock);
+    if (!out->standby) {
+        out->standby = true;
+        stop_compressed_output_l(out);
+        out->gapless_mdata.encoder_delay = 0;
+        out->gapless_mdata.encoder_padding = 0;
+        if (out->compress != NULL) {
+            compress_close(out->compress);
+            out->compress = NULL;
+        }
+    }
+    pthread_mutex_unlock(&out->lock);
+    ALOGV("%s: exit", __func__);
     return 0;
 }
 
@@ -637,17 +692,25 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     return 0;
 }
 
+static int send_offload_cmd_l(struct offload_stream_out* out, int command)
+{
+    struct offload_cmd *cmd = (struct offload_cmd *)calloc(1, sizeof(struct offload_cmd));
+
+    ALOGV("%s %d", __func__, command);
+
+    cmd->cmd = command;
+    list_add_tail(&out->offload_cmd_list, &cmd->node);
+    pthread_cond_signal(&out->offload_cond);
+    return 0;
+}
 static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
-
-    if (!bytes) {
-        if (out->compress && out->state==STREAM_RUNNING) {
-            ALOGV("out_write: calling compress_drain");
-            compress_drain(out->compress);
-        }
-        return 0;
+    if (out->standby) {
+        out->standby = 0;
+        if (out->offload_callback)
+            compress_nonblock(out->compress, out->non_blocking);
     }
 
     int sent = 0;
@@ -669,13 +732,16 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             }
             ALOGV("out_write: state = %d: writting %d bytes", out->state, bytes);
             sent = compress_write(out->compress, buffer, bytes);
+            if (sent >= 0) {// && sent < bytes) {
+                 ALOGV("out_write sending wait for buffer cmd");
+                 send_offload_cmd_l(out, OFFLOAD_CMD_WAIT_FOR_BUFFER);
+            }
             if (sent < 0) {
                 ALOGE("Error: %s\n", compress_get_error(out->compress));
             }
             ALOGV("out_write: state = %d: writting Done with %d bytes", out->state, sent);
             if (compress_start(out->compress) < 0) {
                 ALOGE("write: Failed in the compress_start");
-                return retval;
             }
             ALOGV("out_write[%d]: writen  compress_start in state ", out->state);
             out->state = STREAM_RUNNING;
@@ -686,6 +752,9 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             }
             ALOGV("out_write:[%d] Writing to compress write with %d bytes..", out->state, bytes);
             sent = compress_write(out->compress, buffer, bytes);
+            if (sent >= 0) { // && sent < bytes) {
+                 send_offload_cmd_l(out, OFFLOAD_CMD_WAIT_FOR_BUFFER);
+            }
             if (sent < 0) {
                 ALOGE("out_write:[%d] compress_write: interrupted : %s", out->state, compress_get_error(out->compress));
                 sent = 0;
@@ -738,27 +807,38 @@ static int out_get_render_position(const struct audio_stream_out *stream,
     return 0;
 }
 
+static int out_set_callback(struct audio_stream_out *stream,
+            stream_callback_t callback, void *cookie)
+{
+    struct offload_stream_out *out = (struct stream_out *)stream;
+
+    ALOGV("%s", __func__);
+    pthread_mutex_lock(&out->lock);
+    out->offload_callback = callback;
+    out->offload_cookie = cookie;
+    pthread_mutex_unlock(&out->lock);
+    return 0;
+}
 /* The drain function implementation. This will send drain to driver */
-static int out_drain(struct audio_stream_out *stream)
+static int out_drain(struct audio_stream_out *stream,
+                     audio_drain_type_t type)
 {
     ALOGV("out_drain");
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
+    int status = -ENOSYS;
+    pthread_mutex_lock(&out->lock);
+    if ((type == AUDIO_DRAIN_EARLY_NOTIFY)) {
+        ALOGV("out_drain send command PARTIAL_DRAIN");
+        status = send_offload_cmd_l(out, OFFLOAD_CMD_PARTIAL_DRAIN);
+    }
+    else {
+        ALOGV("out_drain send command DRAIN");
+        status = send_offload_cmd_l(out, OFFLOAD_CMD_DRAIN);
+    }
+    pthread_mutex_unlock(&out->lock);
+    ALOGV("out_drain return status %d", status);
+    return status;
 
-    ALOGV("out_drain: Signalling next track, if we use gapless");
-    if ((compress_next_track(out->compress)) < 0) {
-          ALOGE("set_param error in compress_next_track %s",
-                           compress_get_error(out->compress));
-    }
-    ALOGV("out_drain: calling partail drain");
-    if (compress_partial_drain(out->compress) < 0 ) {
-        ALOGE("out_drain: Failed in the compress_drain ");
-        compress_stop(out->compress);
-        out->state = STREAM_READY;
-        return -ENOSYS;
-    }
-    ALOGV("out_drain: drained");
-    out->state = STREAM_DRAINING;
-    return 0;
 }
 
 static int out_flush (struct audio_stream *stream)
@@ -778,17 +858,112 @@ static int out_flush (struct audio_stream *stream)
             return 0;
     }
     ALOGV("out_flush:[%d] calling Compress Stop", out->state);
-    if (compress_stop(out->compress) < 0) {
-        ALOGE("out_flush: failed in the compress_flush");
-        out->state = STREAM_READY;
-        return -ENOSYS;
-    }
-
+    pthread_mutex_lock(&out->lock);
+    stop_compressed_output_l(out);
+    pthread_mutex_unlock(&out->lock);
     out->state = STREAM_READY;
-    ALOGV("out_flush:[%d] out Compress Stop", out->state);
     return 0;
 }
 
+static void *offload_thread_loop(void *context)
+{
+    struct offload_stream_out *out = (struct offload_stream_out *) context;
+    struct listnode *item;
+
+//    out->offload_state = OFFLOAD_STATE_IDLE;
+    out->playback_started = 0;
+
+    setpriority(PRIO_PROCESS, 0, ANDROID_PRIORITY_AUDIO);
+    set_sched_policy(0, SP_FOREGROUND);
+    prctl(PR_SET_NAME, (unsigned long)"Offload Callback", 0, 0, 0);
+
+    ALOGV("%s", __func__);
+    pthread_mutex_lock(&out->lock);
+    for (;;) {
+        struct offload_cmd *cmd = NULL;
+        stream_callback_event_t event;
+        bool send_callback = false;
+
+        ALOGV("%s offload_cmd_list %d",
+              __func__, list_empty(&out->offload_cmd_list));
+        if (list_empty(&out->offload_cmd_list)) {
+            ALOGV("%s SLEEPING", __func__);
+            pthread_cond_wait(&out->offload_cond, &out->lock);
+            ALOGV("%s RUNNING", __func__);
+            continue;
+        }
+
+        item = list_head(&out->offload_cmd_list);
+        cmd = node_to_item(item, struct offload_cmd, node);
+        list_remove(item);
+
+        ALOGV("%s CMD %d out->compress %p",
+               __func__, cmd->cmd, out->compress);
+
+        if (cmd->cmd == OFFLOAD_CMD_EXIT) {
+            free(cmd);
+            break;
+        }
+
+        if (out->compress == NULL) {
+            ALOGE("%s: Compress handle is NULL", __func__);
+            pthread_cond_signal(&out->cond);
+            continue;
+        }
+        out->offload_thread_blocked = true;
+        pthread_mutex_unlock(&out->lock);
+        send_callback = false;
+        switch(cmd->cmd) {
+        case OFFLOAD_CMD_WAIT_FOR_BUFFER:
+            compress_wait(out->compress, -1);
+            send_callback = true;
+            event = STREAM_CBK_EVENT_WRITE_READY;
+            break;
+        case OFFLOAD_CMD_PARTIAL_DRAIN:
+            compress_next_track(out->compress);
+            compress_partial_drain(out->compress);
+            send_callback = true;
+            event = STREAM_CBK_EVENT_DRAIN_READY;
+            out->state = STREAM_DRAINING;
+            break;
+        case OFFLOAD_CMD_DRAIN:
+            compress_drain(out->compress);
+            send_callback = true;
+            event = STREAM_CBK_EVENT_DRAIN_READY;
+            out->state = STREAM_READY;
+            break;
+        default:
+            ALOGE("%s unknown command received: %d", __func__, cmd->cmd);
+            break;
+        }
+        pthread_mutex_lock(&out->lock);
+        out->offload_thread_blocked = false;
+        pthread_cond_signal(&out->cond);
+        if (send_callback) {
+            ALOGV("offload_thread_loop sending callback event %d", event);
+            out->offload_callback(event, NULL, out->offload_cookie);
+        }
+        free(cmd);
+    }
+
+    pthread_cond_signal(&out->cond);
+    while (!list_empty(&out->offload_cmd_list)) {
+        item = list_head(&out->offload_cmd_list);
+        list_remove(item);
+        free(node_to_item(item, struct offload_cmd, node));
+    }
+    pthread_mutex_unlock(&out->lock);
+
+    return NULL;
+}
+static int create_offload_callback_thread(struct offload_stream_out *out)
+{
+    pthread_cond_init(&out->offload_cond, (const pthread_condattr_t *) NULL);
+    list_init(&out->offload_cmd_list);
+    pthread_create(&out->offload_thread, (const pthread_attr_t *) NULL,
+                    offload_thread_loop, out);
+    return 0;
+}
 static int offload_dev_open_output_stream(struct audio_hw_device *dev,
                                    audio_io_handle_t handle,
                                    audio_devices_t devices,
@@ -830,13 +1005,19 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
     out->stream.set_volume = out_set_volume;
     out->stream.write = out_write;
     out->stream.get_render_position = out_get_render_position;
+    out->stream.set_callback = out_set_callback;
     out->stream.pause = out_pause;
     out->stream.resume = out_resume;
     out->stream.drain = out_drain;
     out->stream.flush = out_flush;
-
+    if (flags & AUDIO_OUTPUT_FLAG_NON_BLOCKING) {
+        ALOGV("offload_dev_open_output_stream: setting non-blocking to 1");
+        out->non_blocking = 1;
+    }
+    ALOGV("offload_dev_open_output_stream: creating callback");
+    create_offload_callback_thread(out);
     *stream_out = &out->stream;
-
+    out->standby = true;
     // initialize stream parameters
     out->format = config->format;
     out->sample_rate = config->sample_rate;
@@ -866,12 +1047,29 @@ err_open:
     return ret;
 }
 
+static int destroy_offload_callback_thread(struct offload_stream_out *out)
+{
+    pthread_mutex_lock(&out->lock);
+    stop_compressed_output_l(out);
+    send_offload_cmd_l(out, OFFLOAD_CMD_EXIT);
+
+    pthread_mutex_unlock(&out->lock);
+    pthread_join(out->offload_thread, (void **) NULL);
+    pthread_cond_destroy(&out->offload_cond);
+
+    return 0;
+}
 static void offload_dev_close_output_stream(struct audio_hw_device *dev,
                                      struct audio_stream_out *stream)
 {
     struct offload_audio_device *loffload_dev = (struct offload_audio_device *)dev;
+    struct offload_stream_out *out = (struct stream_out *)stream;
     ALOGV("offload_dev_close_output_stream");
-    close_device(stream);
+    out_standby(&stream->common);
+    destroy_offload_callback_thread(out);
+    pthread_cond_destroy(&out->cond);
+    pthread_mutex_destroy(&out->lock);
+    //close_device(stream);
     loffload_dev->offload_out_ref_count = 0;
     free(stream);
     release_wake_lock(lockid_offload);
@@ -1048,8 +1246,8 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
     offload_dev->device.set_mode = offload_dev_set_mode;
     offload_dev->device.set_parameters = offload_dev_set_parameters;
     offload_dev->device.get_parameters = offload_dev_get_parameters;
-    offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
-    offload_dev->device.get_offload_buffer_size = offload_dev_get_offload_buffer_size;
+    //offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
+    //offload_dev->device.get_offload_buffer_size = offload_dev_get_offload_buffer_size;
     offload_dev->device.open_output_stream = offload_dev_open_output_stream;
     offload_dev->device.close_output_stream = offload_dev_close_output_stream;
     offload_dev->device.dump = offload_dev_dump;
@@ -1057,6 +1255,8 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
     *device = &offload_dev->device.common;
     return 0;
 }
+
+
 
 static struct hw_module_methods_t hal_module_methods = {
     open:  offload_dev_open,
