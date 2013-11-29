@@ -53,31 +53,6 @@ LOCAL_CFLAGS += -DMRFLD_AUDIO
 endif
 include $(BUILD_SHARED_LIBRARY)
 
-# Build HW effect wrapper
-
-include $(CLEAR_VARS)
-ifeq ($(strip $(INTEL_MUSIC_OFFLOAD_FEATURE)),true)
-
-LOCAL_CFLAGS += -DINTEL_MUSIC_OFFLOAD_FEATURE
-
-LOCAL_MODULE := libhwwrapper
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/soundfx
-LOCAL_SRC_FILES := hweffect/EffectEQ.cpp
-LOCAL_SHARED_LIBRARIES := liblog libcutils \
-                          libutils \
-                          libeffect \
-                          libasound \
-                          libdl
-LOCAL_MODULE_TAGS := optional
-
-LOCAL_C_INCLUDES := $(call include-path-for, frameworks-base) \
-                    $(call include-path-for, audio-effects) \
-                    $(LOCAL_PATH)/hweffect/include \
-                    $(TOP)/vendor/intel/hardware/libeffect/include \
-                    $(call include-path-for, alsa-lib)
-include $(BUILD_SHARED_LIBRARY)
-endif
-
 # The stub audio policy HAL module that can be used as a skeleton for
 # new implementations.
 #include $(CLEAR_VARS)
