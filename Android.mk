@@ -51,6 +51,11 @@ endif
 ifeq ($(strip $(MRFLD_AUDIO)),true)
 LOCAL_CFLAGS += -DMRFLD_AUDIO
 endif
+
+ifeq ($(strip $(AUDIO_OFFLOAD_SCALABILITY)),true)
+LOCAL_CFLAGS += -DAUDIO_OFFLOAD_SCALABILITY
+endif
+
 include $(BUILD_SHARED_LIBRARY)
 
 # The stub audio policy HAL module that can be used as a skeleton for
