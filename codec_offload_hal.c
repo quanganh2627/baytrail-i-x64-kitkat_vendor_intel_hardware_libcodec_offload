@@ -178,6 +178,7 @@ static size_t offload_dev_get_offload_buffer_size(
                                  const struct audio_hw_device *dev,
                                  uint32_t bitRate, uint32_t samplingRate,
                                  uint32_t channel);
+static int destroy_offload_callback_thread(struct offload_stream_out *out);
 
 static bool is_offload_device_available(
                struct offload_audio_device *offload_dev,
@@ -218,7 +219,8 @@ static int out_pause(struct audio_stream *stream)
 
      pthread_mutex_lock(&out->lock);
      if(compress_pause(out->compress) < 0 ) {
-         ALOGE("out_pause : failed in the compress pause");
+         ALOGE("out_pause : failed in the compress pause Err=%s",
+                compress_get_error(out->compress));
          pthread_mutex_unlock(&out->lock);
          return -ENOSYS;
      }
@@ -241,7 +243,8 @@ static int out_resume( struct audio_stream *stream)
     ALOGV("out_resume: the state = %d", out->state);
     pthread_mutex_lock(&out->lock);
     if( compress_resume(out->compress) < 0) {
-        ALOGE("failed in the compress resume");
+        ALOGE("failed in the compress resume Err=%s",
+                  compress_get_error(out->compress));
         pthread_mutex_unlock(&out->lock);
         return -ENOSYS;
     }
@@ -454,10 +457,11 @@ static int out_standby(struct audio_stream *stream)
         stop_compressed_output_l(out);
         out->gapless_mdata.encoder_delay = 0;
         out->gapless_mdata.encoder_padding = 0;
-        if (out->compress != NULL) {
-            compress_close(out->compress);
-            out->compress = NULL;
-        }
+    }
+    if (out->compress != NULL) {
+        ALOGI("out_standby: calling compress_close");
+        compress_close(out->compress);
+        out->compress = NULL;
     }
     pthread_mutex_unlock(&out->lock);
     ALOGV("%s: exit", __func__);
@@ -753,7 +757,8 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             ALOGV("out_write: state = %d: writting Done with %d bytes",
                                                        out->state, sent);
             if (compress_start(out->compress) < 0) {
-                ALOGI("write: Failed in the compress_start");
+                ALOGI("write: Failed in the compress_start Err=%s",
+                           compress_get_error(out->compress));
             }
             ALOGI("out_write[%d]: compress_start in state", out->state);
             out->state = STREAM_RUNNING;
@@ -805,7 +810,8 @@ static int out_get_render_position(const struct audio_stream_out *stream,
         case STREAM_PAUSING:
         case STREAM_DRAINING:
             if (compress_get_hpointer(out->compress, &avail,&tstamp) < 0) {
-                ALOGW("out_get_render_position: compress_get_hposition Failed");
+                ALOGW("out_get_render_position: get_hposition Failed Err=%s",
+                      compress_get_error(out->compress));
                 pthread_mutex_unlock(&out->lock);
                 return -EINVAL;
             }
@@ -1067,6 +1073,7 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
 
 err_open:
     ALOGE("offload_dev_open_output_stream -> err_open:");
+    destroy_offload_callback_thread(out);
     free(out);
     *stream_out = NULL;
     return ret;
@@ -1074,6 +1081,7 @@ err_open:
 
 static int destroy_offload_callback_thread(struct offload_stream_out *out)
 {
+    ALOGI("destroy_offload_callback_thread");
     pthread_mutex_lock(&out->lock);
     stop_compressed_output_l(out);
     send_offload_cmd_l(out, OFFLOAD_CMD_EXIT);
