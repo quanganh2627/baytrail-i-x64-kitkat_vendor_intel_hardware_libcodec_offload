@@ -273,6 +273,7 @@ static int close_device(struct audio_stream_out *stream)
     if (out->compress) {
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
+        out->compress = NULL;
     }
 #ifndef MRFLD_AUDIO
     if (out->fd) {
@@ -561,12 +562,8 @@ static int out_standby(struct audio_stream *stream)
         out->gapless_mdata.encoder_delay = 0;
         out->gapless_mdata.encoder_padding = 0;
     }
-    if (out->compress != NULL) {
-        ALOGI("out_standby: calling compress_close");
-        compress_close(out->compress);
-        out->compress = NULL;
-    }
     pthread_mutex_unlock(&out->lock);
+    close_device(stream);
     ALOGV("%s: exit", __func__);
     return 0;
 }
