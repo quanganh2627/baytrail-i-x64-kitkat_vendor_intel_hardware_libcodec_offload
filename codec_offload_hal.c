@@ -301,19 +301,6 @@ static void open_dev_for_scalability(struct offload_stream_out *out)
 static int out_set_volume_scalability(struct audio_stream_out *stream,
                           float left, float right)
 {
-    // Read the property to see if scalability is enabled in system.
-    // use this to set the mixer controls if enabled.
-    char propValue[PROPERTY_VALUE_MAX];
-    if (property_get("audio.offload.scalability", propValue, "0")) {
-        if (atoi(propValue) != 1) {
-            ALOGI("out_set_volume_scalability: scalbility not enabled");
-            return -EINVAL;
-        }
-    } else {
-        ALOGI("set_volume_scalability:audio.offload.scalability not defined");
-        return -EINVAL;
-
-    }
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
     if(out->soundCardNo < 0) {
         ALOGE("out_set_volume_scalability: without sound card no %d open",
@@ -784,8 +771,15 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     pthread_mutex_unlock(&out->lock);
 #else //MRFLD_AUDIO
 #ifdef AUDIO_OFFLOAD_SCALABILITY
-    ret = out_set_volume_scalability(stream, left, right);
-#else
+    // Read the property to see if scalability is enabled in system.
+    // use this to set the mixer controls if enabled.
+    char propValue[PROPERTY_VALUE_MAX];
+    if ((property_get("audio.offload.scalability", propValue, "0")) &&
+        (atoi(propValue) == 1)) {
+        ALOGI("setVolume: Calling out_set_volume_scalability");
+        return out_set_volume_scalability(stream, left, right);
+    }
+#endif
     if(out->soundCardNo < 0) {
         ALOGE("setVolume: without sound card no %d open", out->soundCardNo);
         return -EINVAL;
@@ -826,7 +820,6 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
         return retval;
     }
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, volume);
-#endif //AUDIO_OFFLOAD_SCALABILITY
 #endif  //MRFLD_AUDIO
     return ret;
 }
