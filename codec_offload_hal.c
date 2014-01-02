@@ -824,6 +824,10 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 static int send_offload_cmd_l(struct offload_stream_out* out, int command)
 {
     struct offload_cmd *cmd = (struct offload_cmd *)calloc(1, sizeof(struct offload_cmd));
+    if (!cmd) {
+        ALOGV("send_offload_cmd_l NO_MEMORY");
+        return -ENOMEM;
+    }
 
     ALOGV("%s %d", __func__, command);
 
