@@ -444,6 +444,13 @@ static int open_device(struct offload_stream_out *out)
         codec.ch_mode = 0;
         codec.format = 0;
 
+        ALOGI("open_device: params: codec.id =%d,codec.ch_in=%d,codec.ch_out=%d,"
+          "codec.sample_rate=%d, codec.bit_rate=%d,codec.rate_control=%d,"
+          "codec.profile=%d,codec.level=%d,codec.ch_mode=%d,codec.format=%x",
+          codec.id, codec.ch_in,codec.ch_out,codec.sample_rate,
+          codec.bit_rate, codec.rate_control, codec.profile,
+          codec.level,codec.ch_mode, codec.format);
+
     } else if (out->format == AUDIO_FORMAT_AAC) {
 
         /* AAC codec parameters  */
@@ -464,13 +471,14 @@ static int open_device(struct offload_stream_out *out)
         codec.level = 0;
         codec.ch_mode = 0;
         codec.format = SND_AUDIOSTREAMFORMAT_RAW;
-    }
-    ALOGI("open_device: params: codec.id =%d,codec.ch_in=%d,codec.ch_out=%d,"
+
+        ALOGI("open_device: params: codec.id =%d,codec.ch_in=%d,codec.ch_out=%d,"
           "codec.sample_rate=%d, codec.bit_rate=%d,codec.rate_control=%d,"
           "codec.profile=%d,codec.level=%d,codec.ch_mode=%d,codec.format=%x",
           codec.id, codec.ch_in,codec.ch_out,codec.sample_rate,
           codec.bit_rate, codec.rate_control, codec.profile,
           codec.level,codec.ch_mode, codec.format);
+    }
     config.fragment_size = out->buffer_size;
     config.fragments = 2;
     config.codec = &codec;
