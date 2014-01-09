@@ -69,6 +69,9 @@
 #define OFFLOAD_STREAM_DEFAULT_OUTPUT   2      /* Speaker */
 #define MIXER_VOL_CTL_NAME "Compress Volume"
 #define FILE_PATH "/proc/asound"
+#define DEFAULT_RAMP_IN_MS 5 //valid mixer range is from 5 to 5000
+#define VOLUME(x) (20 * log10(x)) * 10
+
 
 #ifdef MRFLD_AUDIO
 /* -1440 is the value expected by vol lib for a gain of -144dB */
@@ -295,7 +298,7 @@ static void open_dev_for_scalability(struct offload_stream_out *out)
     // Read the property to get the mixer control names
     property_get("offload.mixer.volume.ctl.name", out->mixVolumeCtl, "0");
     property_get("offload.mixer.mute.ctl.name", out->mixMuteCtl, "0");
-    property_get("offload.mixer.volume.ramp.ctl.name",
+    property_get("offload.mixer.rp.ctl.name",
                                        out->mixVolumeRampCtl, "0");
     ALOGI("The mixer control name for volume = %s, mute = %s, Ramp = %s",
            out->mixVolumeCtl, out->mixMuteCtl, out->mixVolumeRampCtl);
@@ -304,81 +307,83 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
                           float left, float right)
 {
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
+    struct mixer *mixer;
+    struct mixer_ctl* vol_ctl;
+    struct mixer_ctl* mute_ctl;
+    int volume[2];
+    int prevVolume[2];
+    int volumeMute;
+    struct mixer_ctl* volRamp_ctl;
     if(out->soundCardNo < 0) {
         ALOGE("out_set_volume_scalability: without sound card no %d open",
                                                         out->soundCardNo);
         return -EINVAL;
     }
-    struct mixer *mixer;
-    struct mixer_ctl* vol_ctl;
-    uint16_t volume;
     mixer = mixer_open(out->soundCardNo);
     if (!mixer) {
         ALOGE("out_set_volume_scalability:Failed to open mixer for card %d\n",
                                                             out->soundCardNo);
         return -ENOSYS;
     }
-    vol_ctl = mixer_get_ctl_by_name(mixer, MIXER_VOL_CTL_NAME);
+    if (left==0 && right==0) {
+       // set mute on when left and right volumes are zero
+       volumeMute=1;
+       mute_ctl = mixer_get_ctl_by_name(mixer, out->mixMuteCtl);
+       if (!mute_ctl) {
+           ALOGE("out_set_volume_scalability:Error opening mixerMutecontrol%s",
+                                              out->mixMuteCtl);
+           mixer_close(mixer);
+           return -EINVAL;
+       }
+       mixer_ctl_set_value(mute_ctl,0,volumeMute);
+       return 0;
+    }
+    // gain library expects user input of integer gain in 0.1dB
+    // Eg., 60 in decimal represents 6dB
+    volume[0] = VOLUME(left);
+    volume[1] = VOLUME(right);
+    vol_ctl = mixer_get_ctl_by_name(mixer, out->mixVolumeCtl);
     if (!vol_ctl) {
-        ALOGE("out_set_volume_scalability: Error opening the mixer control %s",
-                                              MIXER_VOL_CTL_NAME);
+        ALOGE("out_set_volume_scalability:Error"
+                 "opening mixerVolumecontrol %s", out->mixVolumeCtl);
         mixer_close(mixer);
         return -EINVAL;
     }
-
-    if (left == 0) {
-        // Set the mute value for the FW i.e -144dB
-       volume = SST_VOLUME_MUTE; //2s compliment of -144 dB
-       vol_ctl = mixer_get_ctl_by_name(mixer, out->mixMuteCtl);
-       if (!vol_ctl) {
-            ALOGE("out_set_volume_scalability:Error opening mixerMutecontrol%s",
-                                              out->mixMuteCtl);
-            mixer_close(mixer);
-            return -EINVAL;
-       }
-    } else {
-       // gain library expects user input of integer gain in 0.1dB
-       // Eg., 60 in decimal represents 6dB
-       volume = (uint16_t)((20 * log10(left)) * 10);
-       vol_ctl = mixer_get_ctl_by_name(mixer, out->mixVolumeCtl);
-       if (!vol_ctl) {
-            ALOGE("out_set_volume_scalability:Error"
-                     "opening mixerVolumecontrol %s", out->mixVolumeCtl);
-            mixer_close(mixer);
-            return -EINVAL;
-       }
-    }
-    ALOGV("out_set_volume_scalability: volume computed: %d", volume);
-    if ((mixer_ctl_get_value(vol_ctl, 0)) == volume) {
+    ALOGV("out_set_volume_scalability: volume computed: %x db", volume[0]);
+    mixer_ctl_get_array(vol_ctl,prevVolume,2);
+    if (prevVolume[0] == volume[0] && prevVolume[1] == volume[1] ) {
         ALOGV("out_set_volume_scalability: No update since volume requested");
+        mixer_close(mixer);
         return 0;
     }
-
-    // Call the mixer control for ramp also.
-    // TBD: how to get ramp value? default is 0
-    struct mixer_ctl* volRamp_ctl;
-    uint16_t volumeRamp = 0;
-    volRamp_ctl = mixer_get_ctl_by_name(mixer, out->mixVolumeRampCtl);
+    volRamp_ctl = mixer_get_ctl_by_name(mixer,out->mixVolumeRampCtl);
     if (!volRamp_ctl) {
         ALOGE("out_set_volume_scalability:Error opening mixerVolRamp ctl %s",
                                               out->mixVolumeRampCtl);
         mixer_close(mixer);
         return -EINVAL;
     }
-    int retval = mixer_ctl_set_value(volRamp_ctl, 0, volumeRamp);
-    if (retval < 0) {
-        ALOGE("cwout_set_volume_scalability: Error setting volumeRamp val%x",
-                                                   volumeRamp);
-        return retval;
-    }
-    int retval1 = mixer_ctl_set_value(vol_ctl, 0, volume);
+    unsigned int num_ctl_values =  mixer_ctl_get_num_values(volRamp_ctl);
+    ALOGV("num_ctl_ramp_values = %ld", num_ctl_values);
+    for(int i = 0 ; i < num_ctl_values; i++) {
+        int retval = mixer_ctl_set_value(volRamp_ctl, i, DEFAULT_RAMP_IN_MS);
+        if (retval < 0) {
+            ALOGI("scalability: Error setting volumeRamp = val %x  retval = %d",
+                   DEFAULT_RAMP_IN_MS, retval);
+
+        } else {
+            ALOGV("Ramp value set sucessfully");
+        }
+    } // for loop
+    int retval1 = mixer_ctl_set_array(vol_ctl, volume, 2);
     if (retval1 < 0) {
         ALOGE("out_set_volume_scalability: Err setting volume dB value %x",
                                                 volume);
+        mixer_close(mixer);
         return retval1;
     }
-    ALOGV("out_set_volume_scalability: Successful in set volume=%2f (%x dB)",
-                                              left, volume);
+    ALOGV("out_set_volume_scalability: Successful in set volume");
+    mixer_close(mixer);
     return 0;
 }
 #endif
@@ -393,6 +398,11 @@ static int open_device(struct offload_stream_out *out)
     char id_filepath[PATH_MAX] = {0};
     char number_filepath[PATH_MAX] = {0};
     ssize_t written;
+#ifdef AUDIO_OFFLOAD_SCALABILITY
+    struct mixer *mixer;
+    struct mixer_ctl* mute_ctl;
+#endif
+
     // set the audio.device.name property in the init.<boardname>.rc file
     // or set the property at runtime in adb shell using setprop
     property_get("audio.device.name", value, "0");
@@ -410,6 +420,10 @@ static int open_device(struct offload_stream_out *out)
     // 4 == strlen("card")
     card = atoi(number_filepath + 4);
     out->soundCardNo = card;
+    if(out->soundCardNo < 0) {
+        ALOGE("without sound card no %d open",out->soundCardNo);
+        return -EINVAL;
+    }
     property_get("offload.compress.device", value, "0");
     int device = atoi(value);
 
@@ -506,6 +520,31 @@ static int open_device(struct offload_stream_out *out)
     }
     ALOGV("open_device: intel_sst_ctrl opened sucessuflly with fd=%d", out->fd);
 #endif
+
+#ifdef AUDIO_OFFLOAD_SCALABILITY
+
+    char propValue[PROPERTY_VALUE_MAX];
+    if ((property_get("audio.offload.scalability", propValue, "0")) &&
+        (atoi(propValue) == 1)) {
+        mixer = mixer_open(out->soundCardNo);
+        if (!mixer) {
+            ALOGE("out_set_volume_scalability:Failed to open mixer for card %d\n",
+                                                            out->soundCardNo);
+            return -ENOSYS;
+        }
+        int volumeMute=0;// unmute
+        mute_ctl = mixer_get_ctl_by_name(mixer, out->mixMuteCtl);
+        if (!mute_ctl) {
+            ALOGE("out_set_volume_scalability:Error opening mixerMutecontrol%s",
+                                              out->mixMuteCtl);
+            mixer_close(mixer);
+            return -EINVAL;
+        }
+        mixer_ctl_set_value(mute_ctl,0,volumeMute);
+        mixer_close(mixer);
+    }
+#endif
+
     return 0;
 }
 
@@ -833,7 +872,6 @@ static int send_offload_cmd_l(struct offload_stream_out* out, int command)
         ALOGV("send_offload_cmd_l NO_MEMORY");
         return -ENOMEM;
     }
-
     ALOGV("%s %d", __func__, command);
 
     cmd->cmd = command;
