@@ -273,6 +273,7 @@ static int close_device(struct audio_stream_out *stream)
     if (out->compress) {
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
+        out->compress = NULL;
     }
 #ifndef MRFLD_AUDIO
     if (out->fd) {
@@ -301,19 +302,6 @@ static void open_dev_for_scalability(struct offload_stream_out *out)
 static int out_set_volume_scalability(struct audio_stream_out *stream,
                           float left, float right)
 {
-    // Read the property to see if scalability is enabled in system.
-    // use this to set the mixer controls if enabled.
-    char propValue[PROPERTY_VALUE_MAX];
-    if (property_get("audio.offload.scalability", propValue, "0")) {
-        if (atoi(propValue) != 1) {
-            ALOGI("out_set_volume_scalability: scalbility not enabled");
-            return -EINVAL;
-        }
-    } else {
-        ALOGI("set_volume_scalability:audio.offload.scalability not defined");
-        return -EINVAL;
-
-    }
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
     if(out->soundCardNo < 0) {
         ALOGE("out_set_volume_scalability: without sound card no %d open",
@@ -456,6 +444,13 @@ static int open_device(struct offload_stream_out *out)
         codec.ch_mode = 0;
         codec.format = 0;
 
+        ALOGI("open_device: params: codec.id =%d,codec.ch_in=%d,codec.ch_out=%d,"
+          "codec.sample_rate=%d, codec.bit_rate=%d,codec.rate_control=%d,"
+          "codec.profile=%d,codec.level=%d,codec.ch_mode=%d,codec.format=%x",
+          codec.id, codec.ch_in,codec.ch_out,codec.sample_rate,
+          codec.bit_rate, codec.rate_control, codec.profile,
+          codec.level,codec.ch_mode, codec.format);
+
     } else if (out->format == AUDIO_FORMAT_AAC) {
 
         /* AAC codec parameters  */
@@ -476,13 +471,14 @@ static int open_device(struct offload_stream_out *out)
         codec.level = 0;
         codec.ch_mode = 0;
         codec.format = SND_AUDIOSTREAMFORMAT_RAW;
-    }
-    ALOGI("open_device: params: codec.id =%d,codec.ch_in=%d,codec.ch_out=%d,"
+
+        ALOGI("open_device: params: codec.id =%d,codec.ch_in=%d,codec.ch_out=%d,"
           "codec.sample_rate=%d, codec.bit_rate=%d,codec.rate_control=%d,"
           "codec.profile=%d,codec.level=%d,codec.ch_mode=%d,codec.format=%x",
           codec.id, codec.ch_in,codec.ch_out,codec.sample_rate,
           codec.bit_rate, codec.rate_control, codec.profile,
           codec.level,codec.ch_mode, codec.format);
+    }
     config.fragment_size = out->buffer_size;
     config.fragments = 2;
     config.codec = &codec;
@@ -574,12 +570,8 @@ static int out_standby(struct audio_stream *stream)
         out->gapless_mdata.encoder_delay = 0;
         out->gapless_mdata.encoder_padding = 0;
     }
-    if (out->compress != NULL) {
-        ALOGI("out_standby: calling compress_close");
-        compress_close(out->compress);
-        out->compress = NULL;
-    }
     pthread_mutex_unlock(&out->lock);
+    close_device(stream);
     ALOGV("%s: exit", __func__);
     return 0;
 }
@@ -784,8 +776,15 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     pthread_mutex_unlock(&out->lock);
 #else //MRFLD_AUDIO
 #ifdef AUDIO_OFFLOAD_SCALABILITY
-    ret = out_set_volume_scalability(stream, left, right);
-#else
+    // Read the property to see if scalability is enabled in system.
+    // use this to set the mixer controls if enabled.
+    char propValue[PROPERTY_VALUE_MAX];
+    if ((property_get("audio.offload.scalability", propValue, "0")) &&
+        (atoi(propValue) == 1)) {
+        ALOGI("setVolume: Calling out_set_volume_scalability");
+        return out_set_volume_scalability(stream, left, right);
+    }
+#endif
     if(out->soundCardNo < 0) {
         ALOGE("setVolume: without sound card no %d open", out->soundCardNo);
         return -EINVAL;
@@ -826,7 +825,6 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
         return retval;
     }
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, volume);
-#endif //AUDIO_OFFLOAD_SCALABILITY
 #endif  //MRFLD_AUDIO
     return ret;
 }
@@ -834,6 +832,10 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 static int send_offload_cmd_l(struct offload_stream_out* out, int command)
 {
     struct offload_cmd *cmd = (struct offload_cmd *)calloc(1, sizeof(struct offload_cmd));
+    if (!cmd) {
+        ALOGV("send_offload_cmd_l NO_MEMORY");
+        return -ENOMEM;
+    }
 
     ALOGV("%s %d", __func__, command);
 
