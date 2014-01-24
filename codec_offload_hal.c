@@ -68,6 +68,7 @@
 
 #define OFFLOAD_STREAM_DEFAULT_OUTPUT   2      /* Speaker */
 #define MIXER_VOL_CTL_NAME "Compress Volume"
+#define FILE_PATH "/proc/asound"
 
 #ifdef MRFLD_AUDIO
 /* -1440 is the value expected by vol lib for a gain of -144dB */
@@ -395,7 +396,7 @@ static int open_device(struct offload_stream_out *out)
     // set the audio.device.name property in the init.<boardname>.rc file
     // or set the property at runtime in adb shell using setprop
     property_get("audio.device.name", value, "0");
-    snprintf(id_filepath, sizeof(id_filepath), "/proc/asound/%s", value);
+    snprintf(id_filepath, sizeof(id_filepath), FILE_PATH"/%s", value);
     written = readlink(id_filepath, number_filepath, sizeof(number_filepath));
     if (written < 0) {
         ALOGE("open_device:Sound card %s does not exist", value);
@@ -409,7 +410,6 @@ static int open_device(struct offload_stream_out *out)
     // 4 == strlen("card")
     card = atoi(number_filepath + 4);
     out->soundCardNo = card;
-
     property_get("offload.compress.device", value, "0");
     int device = atoi(value);
 
@@ -418,12 +418,10 @@ static int open_device(struct offload_stream_out *out)
 #endif
 
     ALOGV("open_device: device %d", device);
-
     if (out->state != STREAM_CLOSED) {
         ALOGE("open[%d] Error with stream state", out->state);
         return -EINVAL;
     }
-
     // update the configuration structure for given type of stream
     if (out->format == AUDIO_FORMAT_MP3) {
         codec.id = SND_AUDIOCODEC_MP3;
@@ -485,7 +483,6 @@ static int open_device(struct offload_stream_out *out)
 
     acquire_wake_lock(PARTIAL_WAKE_LOCK, lockid_offload);
     out->compress = compress_open(card, device, COMPRESS_IN, &config);
-
     if (!out->compress || !is_compress_ready(out->compress)) {
         ALOGE("open_device: compress_open Error  %s\n",
                                   compress_get_error(out->compress));
@@ -496,6 +493,8 @@ static int open_device(struct offload_stream_out *out)
         return -EINVAL;
     }
     ALOGV("open_device: Compress device opened sucessfully");
+    ALOGV("open_device: setting compress non block");
+    compress_nonblock(out->compress, out->non_blocking);
 #ifndef MRFLD_AUDIO
     out->fd = open("/dev/intel_sst_ctrl", O_RDWR);
     if (out->fd < 0) {
@@ -646,14 +645,9 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     }
     if (delay >= 0 && padding >= 0) {
         ALOGV("set_param: setting delay %d, padding %d", delay, padding);
-        struct compr_gapless_mdata config;
-        config.encoder_delay = delay;
-        config.encoder_padding = padding;
-
-        if ((compress_set_gapless_metadata(out->compress, &config)) < 0 ) {
-            ALOGE("set_param error in setting meta data %s",
-                                 compress_get_error(out->compress));
-        }
+        out->gapless_mdata.encoder_delay = delay;
+        out->gapless_mdata.encoder_padding = padding;
+        out->send_new_metadata = 1;
     }
     str_parms_destroy(param);
     return 0;
@@ -793,7 +787,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     struct mixer_ctl* vol_ctl;
     uint16_t volume;
     mixer = mixer_open(out->soundCardNo);
-    if (!mixer) {
+    if (mixer == NULL) {
         ALOGE("setVolume:Failed to open mixer for card %d\n", out->soundCardNo);
         return -ENOSYS;
     }
@@ -816,15 +810,18 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     ALOGV("setVolume: volume computed: %d", volume);
     if ((mixer_ctl_get_value(vol_ctl, 0)) == volume) {
         ALOGV("setVolume: No update since volume requested matches to one in the system");
+        mixer_close(mixer);
         return 0;
     }
 
     int retval = mixer_ctl_set_value(vol_ctl, 0, volume);
     if (retval < 0) {
         ALOGE("setVolume: Error setting volume with dB value %x", volume);
+        mixer_close(mixer);
         return retval;
     }
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, volume);
+    mixer_close(mixer);
 #endif  //MRFLD_AUDIO
     return ret;
 }
@@ -849,9 +846,21 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
 {
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
     if (out->standby) {
-        out->standby = 0;
-        if (out->offload_callback)
-            compress_nonblock(out->compress, out->non_blocking);
+        if (open_device(out)) {
+            ALOGE("out_write[%d]: Device open error", out->state);
+            close_device(stream);
+            return -EINVAL;
+        }
+        out->standby = false;
+        out->state = STREAM_READY;
+    }
+    if (out->send_new_metadata) {
+        if ((compress_set_gapless_metadata(out->compress, &out->gapless_mdata)) < 0 ) {
+            ALOGE("set_param error in setting meta data %s",
+                                compress_get_error(out->compress));
+            return -EINVAL;
+        }
+        out->send_new_metadata = 0;
     }
 
     int sent = 0;
@@ -862,7 +871,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         case STREAM_CLOSED:
             // Due to standby the device could be closed (power-saving mode)
             if (open_device(out)) {
-                ALOGE("out_write[%d]: Device open error, retry!", out->state);
+                ALOGE("out_write[%d]: Device open error", out->state);
                 close_device(stream);
                 return retval;
             }
@@ -1172,7 +1181,6 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
     ALOGV("offload_dev_open_output_stream: creating callback");
     create_offload_callback_thread(out);
     *stream_out = &out->stream;
-    out->standby = true;
     // initialize stream parameters
     out->format = config->format;
     out->sample_rate = config->sample_rate;
@@ -1183,7 +1191,6 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
                                                config->channel_mask);
     //Default route is done for offload and let primary HAL do the routing
     out->device_output = OFFLOAD_STREAM_DEFAULT_OUTPUT;
-
     ret = open_device(out);
     if (ret != 0) {
         ALOGE("offload_dev_open_output_stream: open_device error");
@@ -1194,6 +1201,8 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
     loffload_dev->out = out;
 
     ALOGV("offload_dev_open_output_stream: offload device opened");
+
+    out->standby = false;
     out->state = STREAM_READY;
     return 0;
 
