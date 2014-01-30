@@ -36,6 +36,7 @@
 #include <cutils/log.h>
 #include <cutils/str_parms.h>
 #include <cutils/properties.h>
+#include <dirent.h>
 #include <signal.h>
 #include <time.h>
 #include <string.h>
@@ -71,6 +72,7 @@
 #define FILE_PATH "/proc/asound"
 #define DEFAULT_RAMP_IN_MS 5 //valid mixer range is from 5 to 5000
 #define VOLUME(x) (20 * log10(x)) * 10
+#define OFFLOAD_DEVICE_NAME "comprCxD"
 
 
 #ifdef MRFLD_AUDIO
@@ -387,7 +389,32 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
     return 0;
 }
 #endif
-
+int compr_file_select(const struct dirent *entry)
+{
+    if (!strncmp(entry->d_name, "comprC", 6))
+        return 1;
+    else
+        return 0;
+}
+int get_compr_device()
+{
+    ALOGV(" in get_compr_device");
+    int dev, count, i;
+    struct dirent **file_list;
+    const char *dev_name;
+    count = scandir("/dev/snd", &file_list, compr_file_select, NULL);
+    if (count <= 0) {
+        ALOGE("Error no compressed devices found");
+        return -ENODEV;
+    } else if (count > 1) {
+        ALOGV("multiple (%d) compressed devices found, using first one", count);
+    }
+    dev_name = file_list[0]->d_name;
+    ALOGV("compressed device node: %s", dev_name);
+    // 8 == strlen("comprCxD")
+    dev = atoi(dev_name + strlen(OFFLOAD_DEVICE_NAME));
+    return dev;
+}
 static int open_device(struct offload_stream_out *out)
 {
     int card  = -1;
@@ -398,6 +425,7 @@ static int open_device(struct offload_stream_out *out)
     char id_filepath[PATH_MAX] = {0};
     char number_filepath[PATH_MAX] = {0};
     ssize_t written;
+    int device = -1;
 #ifdef AUDIO_OFFLOAD_SCALABILITY
     struct mixer *mixer;
     struct mixer_ctl* mute_ctl;
@@ -420,17 +448,20 @@ static int open_device(struct offload_stream_out *out)
     // 4 == strlen("card")
     card = atoi(number_filepath + 4);
     out->soundCardNo = card;
+
     if(out->soundCardNo < 0) {
         ALOGE("without sound card no %d open",out->soundCardNo);
         return -EINVAL;
     }
-    property_get("offload.compress.device", value, "0");
-    int device = atoi(value);
+    if((device = get_compr_device())<0)
+    {
+        ALOGE(" Error getting device number ");
+        return -EINVAL;
+    }
 
 #ifdef AUDIO_OFFLOAD_SCALABILITY
     open_dev_for_scalability(out);
 #endif
-
     ALOGV("open_device: device %d", device);
     if (out->state != STREAM_CLOSED) {
         ALOGE("open[%d] Error with stream state", out->state);
