@@ -78,6 +78,7 @@
 #define SST_VOLUME_TYPE 0x602
 #define SST_VOLUME_SIZE 1
 #define SST_PPP_VOL_STR_ID  0x03
+#define SST_CODEC_VOLUME_CONTROL 0x67
 #endif
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
 static char lockid_offload[32] = "codec_offload_hal";
@@ -149,7 +150,6 @@ struct offload_stream_out {
     uint32_t            latency;
     uint32_t            adjusted_render_offset;
     uint32_t            paused_duration;
-    struct snd_sst_params      params;
     int                 device_output;
     timer_t             paused_timer_id;
     pthread_mutex_t               lock;
@@ -734,9 +734,9 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
 
     struct snd_ppp_params  sst_ppp_get_vol;
     sst_ppp_get_vol.algo_id = SST_CODEC_VOLUME_CONTROL; // 0x67
-    sst_ppp_get_vol.str_id = SST_PPP_VOL_STR_ID; // 0x03; //out->params.stream_id;
+    sst_ppp_get_vol.str_id = SST_PPP_VOL_STR_ID; // 0x03;
     sst_ppp_get_vol.enable = 1;
-    sst_ppp_get_vol.reserved = 1;
+    sst_ppp_get_vol.operation = 1;
     sst_ppp_get_vol.size =  sizeof(struct offload_vol_algo_param);
     sst_ppp_get_vol.params = &sst_get_vol;
     ALOGV("calling get volume");
@@ -753,9 +753,9 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
                             sst_ppp_get_vol.str_id, sst_get_vol.params);
     struct snd_ppp_params  sst_ppp_vol;
     sst_ppp_vol.algo_id = SST_CODEC_VOLUME_CONTROL;
-    sst_ppp_vol.str_id = SST_PPP_VOL_STR_ID; // 0x03; //out->params.stream_id;
+    sst_ppp_vol.str_id = SST_PPP_VOL_STR_ID; // 0x03;
     sst_ppp_vol.enable = 1;
-    sst_ppp_vol.reserved = 0;
+    sst_ppp_vol.operation = 0;
     sst_ppp_vol.size =  sizeof(struct offload_vol_algo_param);
     sst_ppp_vol.params = &sst_vol;
 
