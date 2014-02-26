@@ -16,7 +16,8 @@
 
 #define LOG_TAG "codec_offload_hw"
 //#define LOG_NDEBUG 0
-
+#include <media/AudioParameter.h>
+#include <media/AudioSystem.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/time.h>
@@ -34,7 +35,6 @@
 #include <linux/ioctl.h>
 #include <linux/poll.h>
 #include <cutils/log.h>
-#include <cutils/str_parms.h>
 #include <cutils/properties.h>
 #include <dirent.h>
 #include <signal.h>
@@ -49,6 +49,9 @@
 #include <sys/prctl.h>
 #include <cutils/sched_policy.h>
 #include "hardware_legacy/power.h"
+extern "C" {
+#include <cutils/str_parms.h>
+}
 #ifdef MRFLD_AUDIO
 #include <tinyalsa/asoundlib.h>
 #endif
@@ -86,6 +89,7 @@
 #define SST_CODEC_VOLUME_CONTROL 0x67
 #endif
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
+using namespace android;
 static char lockid_offload[32] = "codec_offload_hal";
 enum {
     OFFLOAD_CMD_EXIT,               /* exit compress offload thread loop*/
@@ -96,11 +100,12 @@ enum {
 /* stream states */
 typedef enum {
     STREAM_CLOSED    = 0, /* Device not opened yet  */
-    STREAM_READY     = 1, /* Device opened, SET_STREAM_PARAMS done */
-    STREAM_RUNNING   = 2, /* STREAM_START done and write calls going  */
-    STREAM_PAUSING   = 3, /* STREAM_PAUSE to call and stream is pausing */
-    STREAM_RESUMING  = 4,  /* STREAM_RESUME to call and is OK for writes */
-    STREAM_DRAINING  = 5  /* STREAM_DRAINING to call and is OK for writes */
+    STREAM_OPEN      = 1, /* Device opened   */
+    STREAM_READY     = 2, /* Device Ready to be written, mixer setting done */
+    STREAM_RUNNING   = 3, /* STREAM_START done and write calls going  */
+    STREAM_PAUSING   = 4, /* STREAM_PAUSE to call and stream is pausing */
+    STREAM_RESUMING  = 5, /* STREAM_RESUME to call and is OK for writes */
+    STREAM_DRAINING  = 6  /* STREAM_DRAINING to call and is OK for writes */
 }sst_stream_states;
 struct offload_cmd {
     struct listnode node;
@@ -111,7 +116,7 @@ struct offload_cmd {
 * HAL offload hal for configuring the playback
 */
 typedef struct{
-        int32_t format;
+        audio_format_t format;
         int32_t numChannels;
         int32_t sampleRate;
         int32_t bitsPerSample;
@@ -148,7 +153,7 @@ struct offload_stream_out {
     float               volume;
     bool                volume_change_requested;
     bool                muted;
-    int32_t             format;
+    audio_format_t             format;
     uint32_t            sample_rate;
     uint32_t            buffer_size;
     uint32_t            channels;
@@ -216,7 +221,7 @@ static bool is_offload_device_available(
     return true;
 }
 
-static int out_pause(struct audio_stream *stream)
+static int out_pause(struct audio_stream_out *stream)
 {
      ALOGI("out_pause");
      struct offload_stream_out *out = (struct offload_stream_out *)stream;
@@ -241,7 +246,7 @@ static int out_pause(struct audio_stream *stream)
      return 0;
 }
 
-static int out_resume( struct audio_stream *stream)
+static int out_resume( struct audio_stream_out *stream)
 {
     ALOGI("out_resume");
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
@@ -276,7 +281,14 @@ static int close_device(struct audio_stream_out *stream)
         compress_drain(out->compress);
         ALOGV("Close: coming out of drain");
     }
+    pthread_mutex_unlock(&out->lock);
     if (out->compress) {
+        AudioParameter param;
+        param.addInt(String8(AudioParameter::keyStreamFlags),
+                                               AUDIO_OUTPUT_FLAG_NONE);
+        ALOGV("close_device, setParam to indicate Offload is closing");
+        AudioSystem::setParameters(0, param.toString());
+        pthread_mutex_lock(&out->lock);
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
         out->compress = NULL;
@@ -288,7 +300,6 @@ static int close_device(struct audio_stream_out *stream)
     }
     out->fd = 0;
 #endif
-
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
     return 0;
@@ -366,8 +377,8 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
         return -EINVAL;
     }
     unsigned int num_ctl_values =  mixer_ctl_get_num_values(volRamp_ctl);
-    ALOGV("num_ctl_ramp_values = %ld", num_ctl_values);
-    for(int i = 0 ; i < num_ctl_values; i++) {
+    ALOGV("num_ctl_ramp_values = %d", num_ctl_values);
+    for(unsigned int i = 0 ; i < num_ctl_values; i++) {
         int retval = mixer_ctl_set_value(volRamp_ctl, i, DEFAULT_RAMP_IN_MS);
         if (retval < 0) {
             ALOGI("scalability: Error setting volumeRamp = val %x  retval = %d",
@@ -380,12 +391,13 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
     int retval1 = mixer_ctl_set_array(vol_ctl, volume, 2);
     if (retval1 < 0) {
         ALOGE("out_set_volume_scalability: Err setting volume dB value %x",
-                                                volume);
+                                                volume[0]);
         mixer_close(mixer);
         return retval1;
     }
     ALOGV("out_set_volume_scalability: Successful in set volume");
     mixer_close(mixer);
+    out->volume_change_requested = false;
     return 0;
 }
 #endif
@@ -462,6 +474,7 @@ static int open_device(struct offload_stream_out *out)
 #ifdef AUDIO_OFFLOAD_SCALABILITY
     open_dev_for_scalability(out);
 #endif
+
     ALOGV("open_device: device %d", device);
     if (out->state != STREAM_CLOSED) {
         ALOGE("open[%d] Error with stream state", out->state);
@@ -640,7 +653,7 @@ static int out_standby(struct audio_stream *stream)
         out->gapless_mdata.encoder_padding = 0;
     }
     pthread_mutex_unlock(&out->lock);
-    close_device(stream);
+    close_device((audio_stream_out*)stream);
     ALOGV("%s: exit", __func__);
     return 0;
 }
@@ -664,7 +677,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     param = str_parms_create_str(kvpairs);
     if (param == NULL) {
         ALOGE("out_set_parameters: Error creating str from kvpairs");
-        return NULL;
+        return 0;
     }
 
     // Bits per sample - for WMA
@@ -769,11 +782,12 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     }
 
     struct offload_stream_out *out = (struct offload_stream_out *)stream ;
+    out->volume = left; // needed if we set volume in  out_write
+    // If error happens during setting the volume, try to set while in out_write
+    out->volume_change_requested = true;
 #ifndef MRFLD_AUDIO
     // Device could be in standby state. Once active, set new volume
     if (!out->fd){
-        out->volume = left;
-        out->volume_change_requested = true;
         ALOGV("setVolume: Requested for %2f, but yet to service when active", left);
         return 0;
     }
@@ -816,6 +830,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
         if (sst_get_vol.params == sst_vol.params) {
             pthread_mutex_unlock(&out->lock);
             ALOGV("setVolume: No update since volume requested matches to one in the system.");
+            out->volume_change_requested = false;
             return 0;
         }
     }
@@ -881,6 +896,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     if ((mixer_ctl_get_value(vol_ctl, 0)) == volume) {
         ALOGV("setVolume: No update since volume requested matches to one in the system");
         mixer_close(mixer);
+        out->volume_change_requested = false;
         return 0;
     }
 
@@ -893,6 +909,8 @@ static int out_set_volume(struct audio_stream_out *stream, float left,
     ALOGV("setVolume: Successful in set volume=%2f (%x dB)", left, volume);
     mixer_close(mixer);
 #endif  //MRFLD_AUDIO
+    // Volume sucessfully set, no need to do again during out_write
+    out->volume_change_requested = false;
     return ret;
 }
 
@@ -903,6 +921,7 @@ static int send_offload_cmd_l(struct offload_stream_out* out, int command)
         ALOGV("send_offload_cmd_l NO_MEMORY");
         return -ENOMEM;
     }
+
     ALOGV("%s %d", __func__, command);
 
     cmd->cmd = command;
@@ -914,6 +933,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                          size_t bytes)
 {
     struct offload_stream_out *out = (struct offload_stream_out *)stream;
+    AudioParameter param;
     if (out->standby) {
         if (open_device(out)) {
             ALOGE("out_write[%d]: Device open error", out->state);
@@ -921,7 +941,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             return -EINVAL;
         }
         out->standby = false;
-        out->state = STREAM_READY;
+        out->state = STREAM_OPEN;
     }
     if (out->send_new_metadata) {
         if ((compress_set_gapless_metadata(out->compress, &out->gapless_mdata)) < 0 ) {
@@ -944,14 +964,22 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                 close_device(stream);
                 return retval;
             }
+        case STREAM_OPEN:
+            ALOGV("out_write:Indicating primary HAL about offload starting");
+            param.addInt(String8(AudioParameter::keyStreamFlags),
+                                   AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD);
+            AudioSystem::setParameters(0, param.toString());
+            out->state = STREAM_READY;
+
         case STREAM_READY:
         case STREAM_DRAINING:
+            // Indicate the primary HAL about the offload starting
             if (out->volume_change_requested) {
                 out->stream.set_volume(&out->stream,out->volume, out->volume);
             }
             ALOGV("out_write: state = %d: writting %d bytes", out->state, bytes);
             sent = compress_write(out->compress, buffer, bytes);
-            if ((sent >= 0) && (sent < bytes)) {
+            if ((sent >= 0) && (sent < (int)bytes)) {
                  ALOGV("out_write sending wait for buffer cmd");
                  send_offload_cmd_l(out, OFFLOAD_CMD_WAIT_FOR_BUFFER);
             }
@@ -974,7 +1002,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             ALOGV("out_write:[%d] Writing to compress write with %d bytes..",
                                                            out->state, bytes);
             sent = compress_write(out->compress, buffer, bytes);
-            if ((sent >= 0) && (sent < bytes)) {
+            if ((sent >= 0) && (sent < (int)bytes)) {
                  send_offload_cmd_l(out, OFFLOAD_CMD_WAIT_FOR_BUFFER);
             }
             if (sent < 0) {
@@ -1022,7 +1050,7 @@ static int out_get_render_position(const struct audio_stream_out *stream,
 
           calTimeMs = (tstamp.tv_sec * 1000) + (tstamp.tv_nsec /1000000);
           *dsp_frames +=calTimeMs;
-          ALOGV("out_get_render_position : time in millisec returned = %ld",
+          ALOGV("out_get_render_position : time in millisec returned = %d",
                                                                 *dsp_frames);
         break;
         default:
@@ -1036,7 +1064,7 @@ static int out_get_render_position(const struct audio_stream_out *stream,
 static int out_set_callback(struct audio_stream_out *stream,
             stream_callback_t callback, void *cookie)
 {
-    struct offload_stream_out *out = (struct stream_out *)stream;
+    struct offload_stream_out *out = (struct offload_stream_out *)stream;
 
     ALOGV("%s", __func__);
     pthread_mutex_lock(&out->lock);
@@ -1067,7 +1095,7 @@ static int out_drain(struct audio_stream_out *stream,
 
 }
 
-static int out_flush (struct audio_stream *stream)
+static int out_flush (const struct audio_stream_out *stream)
 {
    struct offload_stream_out *out = (struct offload_stream_out *)stream;
    switch (out->state) {
@@ -1272,7 +1300,7 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
     ALOGV("offload_dev_open_output_stream: offload device opened");
 
     out->standby = false;
-    out->state = STREAM_READY;
+    out->state = STREAM_OPEN;
     return 0;
 
 err_open:
@@ -1300,7 +1328,7 @@ static void offload_dev_close_output_stream(struct audio_hw_device *dev,
                                      struct audio_stream_out *stream)
 {
     struct offload_audio_device *loffload_dev = (struct offload_audio_device *)dev;
-    struct offload_stream_out *out = (struct stream_out *)stream;
+    struct offload_stream_out *out = (struct offload_stream_out *)stream;
     ALOGV("offload_dev_close_output_stream");
     out_standby(&stream->common);
     destroy_offload_callback_thread(out);
@@ -1322,7 +1350,7 @@ static int offload_dev_set_parameters(struct audio_hw_device *dev, const char *k
     param = str_parms_create_str(kvpairs);
     if (param == NULL) {
         ALOGE("offload_dev_set_parameters: Error creating str from kvpairs");
-        return NULL;
+        return 0;
     }
 
     // Avg bitrate in bps - for WMA/AAC/MP3
@@ -1383,7 +1411,7 @@ static int offload_dev_set_master_volume(struct audio_hw_device *dev, float volu
     return -ENOSYS;
 }
 
-static int offload_dev_set_mode(struct audio_hw_device *dev, int mode)
+static int offload_dev_set_mode(struct audio_hw_device *dev, audio_mode_t mode)
 {
     return 0;
 }
@@ -1521,4 +1549,4 @@ struct audio_module HAL_MODULE_INFO_SYM = {
         dso : NULL,
         reserved : {0},
     },
-};
+};}
