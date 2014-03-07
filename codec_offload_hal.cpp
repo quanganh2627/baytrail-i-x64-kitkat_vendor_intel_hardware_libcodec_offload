@@ -281,14 +281,12 @@ static int close_device(struct audio_stream_out *stream)
         compress_drain(out->compress);
         ALOGV("Close: coming out of drain");
     }
-    pthread_mutex_unlock(&out->lock);
     if (out->compress) {
         AudioParameter param;
         param.addInt(String8(AudioParameter::keyStreamFlags),
                                                AUDIO_OUTPUT_FLAG_NONE);
         ALOGV("close_device, setParam to indicate Offload is closing");
         AudioSystem::setParameters(0, param.toString());
-        pthread_mutex_lock(&out->lock);
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
         out->compress = NULL;
@@ -300,8 +298,8 @@ static int close_device(struct audio_stream_out *stream)
     }
     out->fd = 0;
 #endif
-    pthread_mutex_unlock(&out->lock);
     out->state = STREAM_CLOSED;
+    pthread_mutex_unlock(&out->lock);
     return 0;
 }
 #ifdef AUDIO_OFFLOAD_SCALABILITY
@@ -643,17 +641,16 @@ static void stop_compressed_output_l(struct offload_stream_out *out)
 }
 static int out_standby(struct audio_stream *stream)
 {
-   struct offload_stream_out *out = (struct offload_stream_out *)stream;
-
-    pthread_mutex_lock(&out->lock);
+    struct offload_stream_out *out = (struct offload_stream_out *)stream;
     if (!out->standby) {
+        pthread_mutex_lock(&out->lock);
         out->standby = true;
         stop_compressed_output_l(out);
         out->gapless_mdata.encoder_delay = 0;
         out->gapless_mdata.encoder_padding = 0;
+        pthread_mutex_unlock(&out->lock);
+        close_device((audio_stream_out*)stream);
     }
-    pthread_mutex_unlock(&out->lock);
-    close_device((audio_stream_out*)stream);
     ALOGV("%s: exit", __func__);
     return 0;
 }
@@ -1334,7 +1331,6 @@ static void offload_dev_close_output_stream(struct audio_hw_device *dev,
     destroy_offload_callback_thread(out);
     pthread_cond_destroy(&out->cond);
     pthread_mutex_destroy(&out->lock);
-    //close_device(stream);
     loffload_dev->offload_out_ref_count = 0;
     free(stream);
     release_wake_lock(lockid_offload);
