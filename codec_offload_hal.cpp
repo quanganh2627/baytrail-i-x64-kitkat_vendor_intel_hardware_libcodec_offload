@@ -77,7 +77,6 @@ extern "C" {
 #define VOLUME(x) (20 * log10(x)) * 10
 #define OFFLOAD_DEVICE_NAME "comprCxD"
 
-
 #ifdef MRFLD_AUDIO
 /* -1440 is the value expected by vol lib for a gain of -144dB */
 #define SST_VOLUME_MUTE 0xFA60 /* 2s complement of 1440 */
@@ -347,8 +346,26 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
            return -EINVAL;
        }
        mixer_ctl_set_value(mute_ctl,0,volumeMute);
+       out->muted = true;
+       ALOGV("out_set_volume_scalability: muting ");
+       mixer_close(mixer);
        return 0;
     }
+    else if(out->muted)
+    {
+       volumeMute = 0; // unmute
+       mute_ctl = mixer_get_ctl_by_name(mixer, out->mixMuteCtl);
+       if (!mute_ctl) {
+           ALOGE("out_set_volume_scalability:Error opening mixerMutecontrol%s",
+                                              out->mixMuteCtl);
+           mixer_close(mixer);
+           return -EINVAL;
+       }
+       mixer_ctl_set_value(mute_ctl,0,volumeMute);
+       ALOGV("out_set_volume_scalability: unmuting ");
+       out->muted = false;
+    }
+
     // gain library expects user input of integer gain in 0.1dB
     // Eg., 60 in decimal represents 6dB
     volume[0] = VOLUME(left);
@@ -574,7 +591,7 @@ static int open_device(struct offload_stream_out *out)
                                                             out->soundCardNo);
             return -ENOSYS;
         }
-        int volumeMute=0;// unmute
+        int volumeMute = 0;// unmute
         mute_ctl = mixer_get_ctl_by_name(mixer, out->mixMuteCtl);
         if (!mute_ctl) {
             ALOGE("out_set_volume_scalability:Error opening mixerMutecontrol%s",
@@ -584,6 +601,7 @@ static int open_device(struct offload_stream_out *out)
         }
         mixer_ctl_set_value(mute_ctl,0,volumeMute);
         mixer_close(mixer);
+        out->muted = false;
     }
 #endif
 
