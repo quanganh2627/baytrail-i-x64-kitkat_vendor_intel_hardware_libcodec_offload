@@ -28,7 +28,6 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
 LOCAL_SRC_FILES := codec_offload_hal.cpp
 LOCAL_SHARED_LIBRARIES := liblog libcutils \
                           libutils \
-                          libasound \
                           libtinycompress \
                           libhardware_legacy \
                           libmedia

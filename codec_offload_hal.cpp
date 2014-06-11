@@ -57,7 +57,6 @@ extern "C" {
 #endif
 
 #define _POSIX_SOURCE
-#include <alsa/asoundlib.h>
 #include <cutils/properties.h>
 
 #define CODEC_OFFLOAD_BUFSIZE       (64*1024) /* Default buffer size in bytes */
