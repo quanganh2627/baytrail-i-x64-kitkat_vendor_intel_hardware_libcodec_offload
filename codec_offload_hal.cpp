@@ -174,6 +174,12 @@ struct offload_stream_out {
     struct compr_gapless_mdata gapless_mdata;
     int send_new_metadata;
     int soundCardNo;
+    bool recovery;
+
+    /* TODO: remove this variable when proper value other than -1 is returned
+    by compress_wait() to trigger recovery */
+    bool flushedState;
+
 #ifdef AUDIO_OFFLOAD_SCALABILITY
     char mixVolumeCtl[PROPERTY_VALUE_MAX];
     char mixMuteCtl[PROPERTY_VALUE_MAX];
@@ -1111,6 +1117,12 @@ static int out_drain(struct audio_stream_out *stream,
     if ((type == AUDIO_DRAIN_EARLY_NOTIFY)) {
         ALOGV("out_drain send command PARTIAL_DRAIN");
         status = send_offload_cmd_l(out, OFFLOAD_CMD_PARTIAL_DRAIN);
+        ALOGV("out->recovery %d", out->recovery);
+        if (out->recovery) {
+           ALOGV("out_drain stop compress output due to recovery");
+           stop_compressed_output_l(out);
+           out->recovery = false;
+        }
     }
     else {
         ALOGV("out_drain send command DRAIN");
@@ -1132,6 +1144,11 @@ static int out_flush (struct audio_stream_out *stream)
             break;
         case STREAM_PAUSING:
             out->adjusted_render_offset = 0;
+
+            /* TODO: remove this code when proper value other than -1 is
+            returned by compress_wait() to trigger recovery */
+            out->flushedState = true;
+
             break;
         default :
             ALOGV("out_flush: ignored");
@@ -1143,13 +1160,29 @@ static int out_flush (struct audio_stream_out *stream)
     stop_compressed_output_l(out);
     pthread_mutex_unlock(&out->lock);
     out->state = STREAM_READY;
+    out->flushedState = false;
     return 0;
+}
+
+static void do_recovery(void *context)
+{
+    struct offload_stream_out *out = (struct offload_stream_out *) context;
+    compress_stop(out->compress);
+    close_device((audio_stream_out*)out);
+    ALOGV("do_recovery device closed");
+    open_device(out);
+    ALOGV("do_recovery device opened");
+    out->standby = false;
+    out->state = STREAM_OPEN;
+    out->recovery = true;
+    ALOGV("do_recovery write old buffer");
 }
 
 static void *offload_thread_loop(void *context)
 {
     struct offload_stream_out *out = (struct offload_stream_out *) context;
     struct listnode *item;
+    int retval;
 
 //    out->offload_state = OFFLOAD_STATE_IDLE;
     out->playback_started = 0;
@@ -1196,8 +1229,17 @@ static void *offload_thread_loop(void *context)
         send_callback = false;
         switch(cmd->cmd) {
         case OFFLOAD_CMD_WAIT_FOR_BUFFER:
-            ALOGV("OFFLOAD_CMD_WAIT_FOR_BUFFER waiting on Compress_wait");
-            compress_wait(out->compress, -1);
+            retval = compress_wait(out->compress, -1);
+            ALOGV("compress_wait returns %d", retval);
+
+            /* TODO: remove the below check for value of flushedState and
+            modify the check for retval according to proper value
+            (other than -1) i.e. received to trigger recovery */
+            if (retval < 0 && out->flushedState == false) {
+                ALOGV("compress_wait returns error, do recovery");
+                do_recovery(out);
+            }
+
             ALOGV("OFFLOAD_CMD_WAIT_FOR_BUFFER coming out of Compress_wait");
             send_callback = true;
             event = STREAM_CBK_EVENT_WRITE_READY;
@@ -1206,7 +1248,8 @@ static void *offload_thread_loop(void *context)
             ALOGV("OFFLOAD_CMD_PARTIAL_DRAIN: Calling compress_next_track");
             compress_next_track(out->compress);
             ALOGV("OFFLOAD_CMD_PARTIAL_DRAIN: Calling compress_drain");
-            compress_partial_drain(out->compress);
+            retval = compress_partial_drain(out->compress);
+            ALOGV("OFFLOAD_CMD_PARTIAL_DRAIN: compress_drain<--, retval %d", retval);
             send_callback = true;
             event = STREAM_CBK_EVENT_DRAIN_READY;
             out->state = STREAM_DRAINING;
@@ -1316,6 +1359,7 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
                                                config->channel_mask);
     //Default route is done for offload and let primary HAL do the routing
     out->device_output = OFFLOAD_STREAM_DEFAULT_OUTPUT;
+    out->recovery = false;
     ret = open_device(out);
     if (ret != 0) {
         ALOGE("offload_dev_open_output_stream: open_device error");
