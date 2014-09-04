@@ -1109,7 +1109,7 @@ static int out_drain(struct audio_stream_out *stream,
 
 }
 
-static int out_flush (const struct audio_stream_out *stream)
+static int out_flush (struct audio_stream_out *stream)
 {
    struct offload_stream_out *out = (struct offload_stream_out *)stream;
    switch (out->state) {
