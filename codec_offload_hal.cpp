@@ -16,6 +16,7 @@
 
 #define LOG_TAG "codec_offload_hw"
 //#define LOG_NDEBUG 0
+#include <IntelAudioParameters.hpp>
 #include <media/AudioParameter.h>
 #include <media/AudioSystem.h>
 #include <pthread.h>
@@ -42,7 +43,7 @@
 #include <string.h>
 #include <utils/threads.h>
 #include <linux/sound/intel_sst_ioctl.h>
-#include <compress_params.h>
+#include <sound/compress_params.h>
 #include <tinycompress.h>
 #include <cutils/list.h>
 #include <sys/resource.h>
@@ -281,10 +282,15 @@ static int close_device(struct audio_stream_out *stream)
     }
     if (out->compress) {
         AudioParameter param;
-        param.addInt(String8(AudioParameter::keyStreamFlags),
+        param.addInt(String8(AUDIO_PARAMETER_KEY_STREAM_FLAGS),
                                                AUDIO_OUTPUT_FLAG_NONE);
         ALOGV("close_device, setParam to indicate Offload is closing");
-        AudioSystem::setParameters(0, param.toString());
+        /**
+         * Using AUDIO_IO_HANDLE_NONE intends to address a global setParameters.
+         * This is needed to inform the primary HAL of offload use cases in order to
+         * disable the routing.
+         */
+        AudioSystem::setParameters(AUDIO_IO_HANDLE_NONE, param.toString());
         ALOGV("close_device: compress_close");
         compress_close(out->compress);
         out->compress = NULL;
@@ -980,9 +986,14 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             }
         case STREAM_OPEN:
             ALOGV("out_write:Indicating primary HAL about offload starting");
-            param.addInt(String8(AudioParameter::keyStreamFlags),
+            param.addInt(String8(AUDIO_PARAMETER_KEY_STREAM_FLAGS),
                                    AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD);
-            AudioSystem::setParameters(0, param.toString());
+            /**
+            * Using AUDIO_IO_HANDLE_NONE intends to address a global setParameters.
+            * This is needed to inform the primary HAL of offload use cases in order to
+            * disable the routing.
+            */
+            AudioSystem::setParameters(AUDIO_IO_HANDLE_NONE, param.toString());
             out->state = STREAM_READY;
 
         case STREAM_READY:
@@ -1242,7 +1253,8 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
                                    audio_devices_t devices,
                                    audio_output_flags_t flags,
                                    struct audio_config *config,
-                                   struct audio_stream_out **stream_out)
+                                   struct audio_stream_out **stream_out,
+                                   const char *address)
 {
     ALOGV("offload_dev_open_output_stream:  flag = 0x%x", flags);
 

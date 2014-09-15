@@ -36,13 +36,17 @@ ifeq ($(strip $(MRFLD_AUDIO)),true)
 LOCAL_SHARED_LIBRARIES += libtinyalsa
 endif
 
-LOCAL_STATIC_LIBRARIES := libmedia_helper
+LOCAL_STATIC_LIBRARIES := \
+        libmedia_helper \
+        libaudio_comms_utilities
+
 LOCAL_MODULE_TAGS := optional
 
 LOCAL_C_INCLUDES := $(call include-path-for, alsa-lib) \
                     $(call include-path-for, frameworks-base) \
                     $(call include-path-for, tinycompress)/tinycompress \
-                    $(call include-path-for, tinycompress)/sound
+                    $(call include-path-for, tinycompress)/sound \
+                    $(call include-path-for, audiocomms)
 
 ifeq ($(strip $(MRFLD_AUDIO)),true)
 LOCAL_C_INCLUDES += external/tinyalsa/include
