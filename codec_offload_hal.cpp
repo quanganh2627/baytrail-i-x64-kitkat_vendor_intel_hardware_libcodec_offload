@@ -1574,4 +1574,4 @@ struct audio_module HAL_MODULE_INFO_SYM = {
         dso : NULL,
         reserved : {0},
     },
-};}
+};
