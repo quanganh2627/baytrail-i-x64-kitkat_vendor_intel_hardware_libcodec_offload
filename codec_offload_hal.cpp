@@ -1415,6 +1415,19 @@ static char * offload_dev_get_parameters(const struct audio_hw_device *dev,
 {
     return NULL;
 }
+
+//set_mic_mute: feature not supported in CompressHAL
+static int offload_dev_set_mic_mute(struct audio_hw_device *dev, bool state)
+{
+    return android::INVALID_OPERATION;
+}
+
+//get_mic_mute: feature not supported in CompressHAL
+static int offload_dev_get_mic_mute(const struct audio_hw_device *dev, bool *state)
+{
+    return android::INVALID_OPERATION;
+}
+
 // TBD - Do we need to open the compress device do init check ???
 static int offload_dev_init_check(const struct audio_hw_device *dev)
 {
@@ -1546,6 +1559,8 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
     offload_dev->device.set_mode = offload_dev_set_mode;
     offload_dev->device.set_parameters = offload_dev_set_parameters;
     offload_dev->device.get_parameters = offload_dev_get_parameters;
+    offload_dev->device.set_mic_mute = offload_dev_set_mic_mute;
+    offload_dev->device.get_mic_mute = offload_dev_get_mic_mute;
     //offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
     //offload_dev->device.get_offload_buffer_size = offload_dev_get_offload_buffer_size;
     offload_dev->device.open_output_stream = offload_dev_open_output_stream;
