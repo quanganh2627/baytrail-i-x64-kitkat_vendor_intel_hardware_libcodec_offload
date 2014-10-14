@@ -1428,6 +1428,66 @@ static int offload_dev_get_mic_mute(const struct audio_hw_device *dev, bool *sta
     return android::INVALID_OPERATION;
 }
 
+static int offload_dev_get_master_volume (struct audio_hw_device *dev, float *volume)
+{
+    return android::INVALID_OPERATION;
+}
+
+static int offload_dev_open_input_stream (struct audio_hw_device *dev,
+                                          audio_io_handle_t handle,
+                                          audio_devices_t devices,
+                                          struct audio_config *config,
+                                          struct audio_stream_in **stream_in,
+                                          audio_input_flags_t flags,
+                                          const char *address,
+                                          audio_source_t source)
+{
+    return android::INVALID_OPERATION;
+}
+
+static void offload_dev_close_input_stream (struct audio_hw_device *dev,
+                                            struct audio_stream_in *stream_in)
+{
+}
+
+static int offload_dev_set_master_mute (struct audio_hw_device *dev, bool mute)
+{
+    return android::INVALID_OPERATION;
+}
+
+static int offload_dev_get_master_mute (struct audio_hw_device *dev, bool *mute)
+{
+    return android::INVALID_OPERATION;
+}
+
+static int offload_dev_create_audio_patch (struct audio_hw_device *dev,
+                                           unsigned int num_sources,
+                                           const struct audio_port_config *sources,
+                                           unsigned int num_sinks,
+                                           const struct audio_port_config *sinks,
+                                           audio_patch_handle_t *handle)
+{
+    return android::INVALID_OPERATION;
+}
+
+static int offload_dev_release_audio_patch (struct audio_hw_device *dev,
+                                            audio_patch_handle_t handle)
+{
+    return android::INVALID_OPERATION;
+}
+
+static int offload_dev_get_audio_port (struct audio_hw_device *dev,
+                                       struct audio_port *port)
+{
+    return android::INVALID_OPERATION;
+}
+
+static int offload_dev_set_audio_port_config (struct audio_hw_device *dev,
+                                              const struct audio_port_config *config)
+{
+    return android::INVALID_OPERATION;
+}
+
 // TBD - Do we need to open the compress device do init check ???
 static int offload_dev_init_check(const struct audio_hw_device *dev)
 {
@@ -1454,9 +1514,8 @@ static int offload_dev_set_mode(struct audio_hw_device *dev, audio_mode_t mode)
     return 0;
 }
 
-static size_t offload_dev_get_input_buffer_size(const struct audio_hw_device *dev,
-                                         uint32_t sample_rate, audio_format_t format,
-                                         int channel_count)
+static size_t offload_dev_get_input_buffer_size (const struct audio_hw_device *dev,
+                                                 const struct audio_config *config)
 {
     return CODEC_OFFLOAD_INPUT_BUFFERSIZE;
 }
@@ -1561,8 +1620,16 @@ static int offload_dev_open(const hw_module_t* module, const char* name,
     offload_dev->device.get_parameters = offload_dev_get_parameters;
     offload_dev->device.set_mic_mute = offload_dev_set_mic_mute;
     offload_dev->device.get_mic_mute = offload_dev_get_mic_mute;
-    //offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
-    //offload_dev->device.get_offload_buffer_size = offload_dev_get_offload_buffer_size;
+    offload_dev->device.get_input_buffer_size = offload_dev_get_input_buffer_size;
+    offload_dev->device.get_master_volume = offload_dev_get_master_volume;
+    offload_dev->device.open_input_stream = offload_dev_open_input_stream;
+    offload_dev->device.close_input_stream = offload_dev_close_input_stream;
+    offload_dev->device.set_master_mute = offload_dev_set_master_mute;
+    offload_dev->device.get_master_mute = offload_dev_get_master_mute;
+    offload_dev->device.create_audio_patch = offload_dev_create_audio_patch;
+    offload_dev->device.release_audio_patch = offload_dev_release_audio_patch;
+    offload_dev->device.get_audio_port = offload_dev_get_audio_port;
+    offload_dev->device.set_audio_port_config = offload_dev_set_audio_port_config;
     offload_dev->device.open_output_stream = offload_dev_open_output_stream;
     offload_dev->device.close_output_stream = offload_dev_close_output_stream;
     offload_dev->device.dump = offload_dev_dump;
