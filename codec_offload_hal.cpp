@@ -535,7 +535,7 @@ static int open_device(struct offload_stream_out *out)
           codec.bit_rate, codec.rate_control, codec.profile,
           codec.level,codec.ch_mode, codec.format);
 
-    } else if (out->format == AUDIO_FORMAT_AAC) {
+    } else if ((out->format & AUDIO_FORMAT_AAC) == AUDIO_FORMAT_AAC) {
 
         /* AAC codec parameters  */
         codec.id = SND_AUDIOCODEC_AAC;
