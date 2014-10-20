@@ -354,6 +354,7 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
        out->muted = true;
        ALOGV("out_set_volume_scalability: muting ");
        mixer_close(mixer);
+       out->volume_change_requested = false;
        return 0;
     }
     else if(out->muted)
@@ -387,6 +388,7 @@ static int out_set_volume_scalability(struct audio_stream_out *stream,
     if (prevVolume[0] == volume[0] && prevVolume[1] == volume[1] ) {
         ALOGV("out_set_volume_scalability: No update since volume requested");
         mixer_close(mixer);
+        out->volume_change_requested = false;
         return 0;
     }
     volRamp_ctl = mixer_get_ctl_by_name(mixer,out->mixVolumeRampCtl);
