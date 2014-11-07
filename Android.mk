@@ -23,7 +23,7 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE := audio.codec_offload.$(TARGET_DEVICE)
-LOCAL_MODULE__RELATIVE_PATH := hw
+LOCAL_MODULE_RELATIVE_PATH := hw
 #LOCAL_CFLAGS := -std=c99
 LOCAL_SRC_FILES := codec_offload_hal.cpp
 LOCAL_SHARED_LIBRARIES := liblog libcutils \
