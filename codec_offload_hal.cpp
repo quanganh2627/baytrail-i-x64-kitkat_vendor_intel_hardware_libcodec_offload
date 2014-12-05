@@ -90,6 +90,7 @@ extern "C" {
 #define CODEC_OFFLOAD_INPUT_BUFFERSIZE 320
 using namespace android;
 static char lockid_offload[32] = "codec_offload_hal";
+static const char *const OFFLOAD_OUTPUT_DEVICE_KEY = "output_devices";
 enum {
     OFFLOAD_CMD_EXIT,               /* exit compress offload thread loop*/
     OFFLOAD_CMD_DRAIN,              /* send a full drain request to DSP */
@@ -707,7 +708,26 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         ALOGE("out_set_parameters: Error creating str from kvpairs");
         return 0;
     }
+    // keyrouting from policy
+    if ( str_parms_get_int(param, AUDIO_PARAMETER_STREAM_ROUTING, &value) >= 0) {
+        str_parms_del(param, AUDIO_PARAMETER_STREAM_ROUTING);
 
+        /*
+        * Why do we need to filter AUDIO_DEVICE_NONE?
+        * When for example A2DP Headset is disconnected, the policy manager sends routing=0.
+        * When the stream is started again, the policy does not force the routing as it
+        * considers that the new device selected is the same than the previous one.
+        * In fact, selecting device=AUDIO_DEVICE_NONE does not update the device member of output
+        * descriptor, leading the policy to think that no changes happened on the routing.
+        *
+        * Ignoring AUDIO_DEVICE_NONE fixes the issue in the audio HAL as it avoids reseting
+        * the routing information at HAL layer.
+        */
+        if (value != AUDIO_DEVICE_NONE) {
+            out->device_output = value;
+            ALOGV("offload_dev_set_parameters: new selected device 0x%X", out->device_output);
+        }
+    }
     // Bits per sample - for WMA
     if (str_parms_get_int(param, AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE, &value) >= 0) {
         str_parms_del(param, AUDIO_OFFLOAD_CODEC_BIT_PER_SAMPLE);
@@ -996,6 +1016,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             ALOGV("out_write:Indicating primary HAL about offload starting");
             param.addInt(String8(AUDIO_PARAMETER_KEY_STREAM_FLAGS),
                                    AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD);
+            param.addInt(String8(OFFLOAD_OUTPUT_DEVICE_KEY), out->device_output);
             /**
             * Using AUDIO_IO_HANDLE_NONE intends to address a global setParameters.
             * This is needed to inform the primary HAL of offload use cases in order to
@@ -1358,7 +1379,8 @@ static int offload_dev_open_output_stream(struct audio_hw_device *dev,
                                                config->sample_rate,
                                                config->channel_mask);
     //Default route is done for offload and let primary HAL do the routing
-    out->device_output = OFFLOAD_STREAM_DEFAULT_OUTPUT;
+    out->device_output = (devices != AUDIO_DEVICE_NONE ?
+            devices : OFFLOAD_STREAM_DEFAULT_OUTPUT);
     out->recovery = false;
     ret = open_device(out);
     if (ret != 0) {
