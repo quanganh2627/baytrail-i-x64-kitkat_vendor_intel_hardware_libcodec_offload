@@ -1,4 +1,4 @@
-# Copyright (C) 2011 The Android Open Source Project
+# Copyright (C) 2014 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ LOCAL_PATH := $(call my-dir)
 # required type is 'primary'. Other possibilites are 'a2dp', 'usb', etc.
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := audio.codec_offload.$(TARGET_DEVICE)
+LOCAL_MODULE := audio.codec_offload.$(TARGET_PRODUCT)
 LOCAL_MODULE_RELATIVE_PATH := hw
 #LOCAL_CFLAGS := -std=c99
 LOCAL_SRC_FILES := codec_offload_hal.cpp
@@ -41,12 +41,12 @@ LOCAL_STATIC_LIBRARIES := \
         libaudio_comms_utilities
 
 LOCAL_MODULE_TAGS := optional
+LOCAL_MODULE_OWNER := intel
 
 LOCAL_C_INCLUDES := $(call include-path-for, alsa-lib) \
                     $(call include-path-for, frameworks-base) \
-                    $(call include-path-for, tinycompress)/tinycompress \
-                    $(call include-path-for, tinycompress)/sound \
-                    $(call include-path-for, audiocomms)
+                    $(call include-path-for, audiocomms) \
+                    external/tinycompress/include/tinycompress
 
 ifeq ($(strip $(MRFLD_AUDIO)),true)
 LOCAL_C_INCLUDES += external/tinyalsa/include
